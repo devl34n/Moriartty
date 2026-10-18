@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: CI only needs to read the code.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    # GitHub's Ubuntu runners ship a GTK/VTE too old for gtk4-rs 0.9 / VTE 0.76,
+    # so build inside distribution containers that have them.
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - registry.fedoraproject.org/fedora:latest
+          - docker.io/library/debian:trixie
+    steps:
+      - name: Install build dependencies (Fedora)
+        if: startsWith(matrix.image, 'registry.fedoraproject.org')
+        run: dnf install -y --setopt=install_weak_deps=False rust cargo gcc gtk4-devel vte291-gtk4-devel git
+
+      - name: Install build dependencies (Debian)
+        if: startsWith(matrix.image, 'docker.io/library/debian')
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ca-certificates build-essential pkg-config git cargo rustc libgtk-4-dev libvte-2.91-gtk4-dev
+
+      # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --release --locked

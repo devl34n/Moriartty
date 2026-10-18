@@ -1,0 +1,25 @@
+[package]
+name = "moriartty"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "A PuTTY-style (pterm) terminal emulator for Linux"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+vte = { package = "vte4", version = "0.8" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+nix = { version = "0.29", features = ["fs", "signal", "process", "user"] }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Keep integer overflow checks on in release builds: wrap-around bugs must
+# abort, never silently corrupt state.
+overflow-checks = true
+panic = "abort"

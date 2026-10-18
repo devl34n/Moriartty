@@ -1,0 +1,13 @@
+# Build output (published packages live in releases/)
+/target/
+/rpmbuild/
+/dist/
+/vendor/
+/.cargo/
+
+# Editors / OS
+*.swp
+*~
+.idea/
+.vscode/
+.DS_Store
