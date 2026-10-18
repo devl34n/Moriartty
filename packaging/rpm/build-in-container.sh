@@ -4,7 +4,6 @@
 set -euo pipefail
 
 : "${VERSION:?VERSION not set}"
-NAME=moriartty
 
 dnf install -y -q --setopt=install_weak_deps=False \
     rust cargo gcc rpm-build gtk4-devel vte291-gtk4-devel \
@@ -17,21 +16,13 @@ cd /build
 [[ -f Cargo.lock ]] || cargo generate-lockfile
 cp Cargo.lock /out/Cargo.lock
 
+# Same SRPM step COPR uses, then build the binary RPM from it.
+bash packaging/rpm/make-srpm.sh /tmp/srpm
+SRPM=$(ls -1 /tmp/srpm/*.src.rpm | head -n1)
 TOP=/tmp/rpmbuild
-mkdir -p "$TOP"/{SOURCES,SPECS,BUILD,RPMS,SRPMS}
-STAGE=$(mktemp -d)
-SRC="$STAGE/$NAME-$VERSION"
-mkdir -p "$SRC"
-cp -a Cargo.toml Cargo.lock src packaging README.md LICENSE "$SRC/"
-tar -C "$STAGE" -czf "$TOP/SOURCES/$NAME-$VERSION.tar.gz" "$NAME-$VERSION"
+rpmbuild --define "_topdir $TOP" --rebuild "$SRPM"
 
-# Vendor crates (the only network step) so rpmbuild itself runs offline.
-( cd "$SRC" && cargo vendor --locked vendor >/dev/null )
-tar -C "$SRC" -czf "$TOP/SOURCES/$NAME-$VERSION-vendor.tar.gz" vendor
-
-cp "packaging/$NAME.spec" "$TOP/SPECS/"
-rpmbuild --define "_topdir $TOP" -ba "$TOP/SPECS/$NAME.spec"
-
-find "$TOP/RPMS" "$TOP/SRPMS" -name '*.rpm' -exec cp -t /out {} +
+cp -t /out "$SRPM"
+find "$TOP/RPMS" -name '*.rpm' -exec cp -t /out {} +
 echo "Wrote:"
 ls -1 /out/*.rpm

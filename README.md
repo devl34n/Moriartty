@@ -3,8 +3,6 @@
 A PuTTY-style terminal emulator for Linux (think PuTTY's `pterm`), written in
 Rust with GTK 4 + VTE.
 
-<img width="825" height="649" alt="image" src="https://github.com/user-attachments/assets/e29fcc7f-e2a4-4b30-a62a-f2eb6794032d" />
-
 * Launching opens a terminal running your shell straight away.
 * **Copy on select** and **right-click paste** are on by default (PuTTY's
   "Compromise" mouse mode).
@@ -18,15 +16,23 @@ Rust with GTK 4 + VTE.
 * "Default Settings" applies to every new window. Other saved sessions are
   settings profiles you can use with `-load`.
 
+## Install on Fedora (COPR)
+
+```sh
+sudo dnf copr enable devl34n/moriartty
+sudo dnf install moriartty
+```
+
+Updates then arrive with normal `dnf upgrade`.
+
 ## Install a prebuilt package
 
-Download the `.rpm` or `.deb` and `SHA256SUMS` from the
-[latest release](https://github.com/devl34n/Moriartty/releases/latest),
-then verify and install from the same folder:
+Ready-made packages are in [`releases/`](releases/). Check them against
+`SHA256SUMS` first:
 
-```
+```sh
 sha256sum -c SHA256SUMS --ignore-missing
-sudo dnf install ./moriartty-*.rpm      # Fedora 39+
+sudo dnf install ./moriartty-*.rpm      # Fedora
 sudo apt install ./moriartty_*.deb      # Debian 13+ / Ubuntu 25.04+
 ```
 
