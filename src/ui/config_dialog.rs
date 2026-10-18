@@ -47,10 +47,19 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
         .build();
     let form = Form::new(initial);
 
+    // Without this, changes only affect the current window and are gone in
+    // the next one — which looks like a bug to anyone who isn't a PuTTY user.
+    let save_default = gtk::CheckButton::with_label("Save as Default Settings");
+    save_default.set_active(true);
+    save_default.set_tooltip_text(Some(
+        "Also use these settings for every new Moriartty window",
+    ));
+
     let open: Rc<dyn Fn()> = {
         let form = form.clone();
         let window = window.clone();
         let app = app.clone();
+        let save_default = save_default.clone();
         Rc::new(move || {
             let mut s = form.get();
             s.sanitize();
@@ -58,11 +67,20 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
                 ui::message(&window, "Invalid settings", &e);
                 return;
             }
+            let saved = if save_default.is_active() {
+                storage::save_session(storage::DEFAULT_SESSION, &s)
+            } else {
+                Ok(())
+            };
             match &mode {
                 Mode::New => ui::terminal::open(&app, s, None, None),
                 Mode::Reconfigure(apply) => apply(s),
             }
-            window.close();
+            match saved {
+                Ok(()) => window.close(),
+                // Applied, but keep the dialog open so the error is seen.
+                Err(e) => ui::message(&window, "Settings applied, but could not be saved", &e),
+            }
         })
     };
 
@@ -121,7 +139,9 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
     body.append(&stack);
 
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.set_halign(gtk::Align::End);
+    save_default.set_hexpand(true);
+    save_default.set_halign(gtk::Align::Start);
+    buttons.append(&save_default);
     let cancel = gtk::Button::with_label("Cancel");
     let open_btn = gtk::Button::with_label(if reconfig { "Apply" } else { "Open" });
     open_btn.add_css_class("suggested-action");
@@ -319,7 +339,8 @@ fn keyboard_page(f: &Form, _c: &Ctx) -> gtk::Box {
     note(
         &g,
         "Shortcuts: Ctrl+Shift+C / Ctrl+Insert copy, Ctrl+Shift+V / Shift+Insert paste, \
-         Ctrl+Shift+N new window.",
+         Ctrl+Shift+N new window, Ctrl+Shift+F find, Ctrl+Shift+P settings, \
+         Ctrl+= / Ctrl+- / Ctrl+0 zoom.",
     );
     p
 }
@@ -340,6 +361,7 @@ fn features_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Enabling and disabling advanced terminal features");
     let g = group(&p, "Enable/disable advanced terminal features");
     f.check(&g, "Disable remote-controlled window title changing", |s| s.no_remote_wintitle, |s, v| s.no_remote_wintitle = v);
+    f.check(&g, "Ctrl+click opens web links (http/https only)", |s| s.clickable_urls, |s, v| s.clickable_urls = v);
     f.check(&g, "Allow clickable hyperlinks (OSC 8)", |s| s.allow_hyperlinks, |s, v| s.allow_hyperlinks = v);
     note(
         &g,
@@ -407,6 +429,27 @@ fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
 
 fn colours_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling use of colours");
+
+    let g = group(&p, "Colour scheme");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let names: Vec<&str> = SCHEMES.iter().map(|(n, _)| *n).collect();
+    let schemes = gtk::DropDown::from_strings(&names);
+    schemes.set_hexpand(true);
+    let apply = gtk::Button::with_label("Use this scheme");
+    {
+        let (f, schemes) = (f.clone(), schemes.clone());
+        apply.connect_clicked(move |_| {
+            if let Some((_, colours)) = SCHEMES.get(schemes.selected() as usize) {
+                f.s.borrow_mut().colours = colours.clone();
+                f.refresh();
+            }
+        });
+    }
+    row.append(&schemes);
+    row.append(&apply);
+    g.append(&row);
+    note(&g, "Replaces all the colours below; you can still fine-tune them afterwards.");
+
     let g = group(&p, "General options for colour usage");
     f.check(&g, "Show bold text in a brighter colour", |s| s.bold_as_colour, |s, v| s.bold_as_colour = v);
     let g = group(&p, "Adjust the precise colours Moriartty displays");
@@ -418,15 +461,5 @@ fn colours_page(f: &Form, _c: &Ctx) -> gtk::Box {
     for (i, name) in ANSI_NAMES.iter().enumerate() {
         f.colour(&g, name, move |s| s.colours.ansi[i], move |s, v| s.colours.ansi[i] = v);
     }
-    let reset = gtk::Button::with_label("Reset to PuTTY defaults");
-    reset.set_halign(gtk::Align::Start);
-    {
-        let f = f.clone();
-        reset.connect_clicked(move |_| {
-            f.s.borrow_mut().colours = Colours::default();
-            f.refresh();
-        });
-    }
-    g.append(&reset);
     p
 }

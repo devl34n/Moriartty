@@ -24,6 +24,7 @@ use super::form::rgba;
 use super::{ask, strip_controls};
 use crate::config::*;
 use crate::logging::{self, SessionLog};
+use crate::matching::{self, PCRE2_CASELESS, PCRE2_MULTILINE, PCRE2_UTF};
 use crate::paste::sanitize_paste;
 use crate::pty::{self, ExitState, Pty, ReadStatus};
 
@@ -38,6 +39,12 @@ pub struct TermWindow {
     term: vte::Terminal,
     scrollbar: gtk::Scrollbar,
     popover: gtk::PopoverMenu,
+    search_bar: gtk::SearchBar,
+    search_entry: gtk::SearchEntry,
+    search_case: gtk::CheckButton,
+    /// VTE match tag of the URL regex, while clickable URLs are enabled.
+    url_tag: Cell<Option<i32>>,
+    hover_url: RefCell<Option<String>>,
     settings: RefCell<Settings>,
     /// `-e` command; `None` runs the shell.
     command: Option<Vec<String>>,
@@ -72,7 +79,14 @@ fn build_menu() -> gio::Menu {
     edit.append(Some("_Copy"), Some("win.copy"));
     edit.append(Some("_Paste"), Some("win.paste"));
     edit.append(Some("Copy _All to Clipboard"), Some("win.copy-all"));
+    edit.append(Some("_Find…"), Some("win.find"));
     menu.append_section(None, &edit);
+
+    let zoom = gio::Menu::new();
+    zoom.append(Some("Zoom _In"), Some("win.zoom-in"));
+    zoom.append(Some("Zoom _Out"), Some("win.zoom-out"));
+    zoom.append(Some("_Normal Size"), Some("win.zoom-reset"));
+    menu.append_section(None, &zoom);
 
     let session = gio::Menu::new();
     session.append(Some("Ne_w Window"), Some("win.new-window"));
@@ -135,7 +149,30 @@ impl TermWindow {
         let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         hbox.append(&term);
         hbox.append(&scrollbar);
-        window.set_child(Some(&hbox));
+
+        // Find bar (Ctrl+Shift+F), hidden until used.
+        let search_entry = gtk::SearchEntry::new();
+        search_entry.set_hexpand(true);
+        search_entry.set_placeholder_text(Some("Find in scrollback"));
+        let prev_btn = gtk::Button::from_icon_name("go-up-symbolic");
+        prev_btn.set_tooltip_text(Some("Previous (older) match — Enter, Ctrl+Shift+G"));
+        let next_btn = gtk::Button::from_icon_name("go-down-symbolic");
+        next_btn.set_tooltip_text(Some("Next (newer) match — Ctrl+G"));
+        let search_case = gtk::CheckButton::with_label("Match case");
+        let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        search_box.append(&search_entry);
+        search_box.append(&prev_btn);
+        search_box.append(&next_btn);
+        search_box.append(&search_case);
+        let search_bar = gtk::SearchBar::new();
+        search_bar.set_child(Some(&search_box));
+        search_bar.connect_entry(&search_entry);
+        search_bar.set_show_close_button(true);
+
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        vbox.append(&search_bar);
+        vbox.append(&hbox);
+        window.set_child(Some(&vbox));
 
         let popover = gtk::PopoverMenu::from_model(Some(&build_menu()));
         popover.set_parent(&term);
@@ -148,6 +185,11 @@ impl TermWindow {
             term,
             scrollbar,
             popover,
+            search_bar,
+            search_entry,
+            search_case,
+            url_tag: Cell::new(None),
+            hover_url: RefCell::new(None),
             settings: RefCell::new(settings),
             command,
             start_dir,
@@ -171,6 +213,7 @@ impl TermWindow {
         tw.update_title();
         tw.connect_signals();
         tw.connect_title_signal();
+        tw.connect_search(&prev_btn, &next_btn);
         tw.install_actions();
         tw
     }
@@ -218,9 +261,73 @@ impl TermWindow {
             BackspaceKey::ControlQuestion => vte::EraseBinding::AsciiDelete,
         });
         self.scrollbar.set_visible(s.scrollbar);
-        let border = s.window_border;
+        let (border, urls) = (s.window_border, s.clickable_urls);
         drop(s);
         self.set_padding(border);
+        self.set_url_matching(urls);
+    }
+
+    /// Highlight http(s) URLs (pointer cursor on hover) so Ctrl+click can
+    /// open them.
+    fn set_url_matching(&self, enabled: bool) {
+        match (enabled, self.url_tag.get()) {
+            (true, None) => {
+                match vte::Regex::for_match(
+                    matching::URL_REGEX,
+                    PCRE2_MULTILINE | PCRE2_UTF | PCRE2_CASELESS,
+                ) {
+                    Ok(re) => {
+                        let tag = self.term.match_add_regex(&re, 0);
+                        self.term.match_set_cursor_name(tag, "pointer");
+                        self.url_tag.set(Some(tag));
+                    }
+                    Err(e) => self.log_event(format!("URL matching unavailable: {e}")),
+                }
+            }
+            (false, Some(tag)) => {
+                self.term.match_remove(tag);
+                self.url_tag.set(None);
+            }
+            _ => {}
+        }
+    }
+
+    /// The safe http(s) link under widget coordinates (x, y), if any:
+    /// a matched URL, or an OSC 8 hyperlink when those are allowed.
+    fn link_at(&self, x: f64, y: f64) -> Option<String> {
+        if let Some(tag) = self.url_tag.get() {
+            let (m, t) = self.term.check_match_at(x, y);
+            if t == tag {
+                if let Some(url) = m.and_then(|m| matching::safe_url(&m)) {
+                    return Some(url);
+                }
+            }
+        }
+        if self.settings.borrow().allow_hyperlinks {
+            if let Some(url) = self.term.check_hyperlink_at(x, y).and_then(|h| matching::safe_url(&h)) {
+                return Some(url);
+            }
+        }
+        None
+    }
+
+    fn update_link_tooltip(&self, x: f64, y: f64) {
+        let link = self.link_at(x, y);
+        if *self.hover_url.borrow() == link {
+            return;
+        }
+        self.term
+            .set_tooltip_text(link.as_ref().map(|u| format!("Ctrl+click to open {u}")).as_deref());
+        *self.hover_url.borrow_mut() = link;
+    }
+
+    fn open_url(&self, url: &str) {
+        self.log_event(format!("Opening {url}"));
+        gtk::UriLauncher::new(url).launch(
+            Some(&self.window),
+            None::<&gio::Cancellable>,
+            |_| {},
+        );
     }
 
     fn set_padding(&self, px: u16) {
@@ -302,15 +409,34 @@ impl TermWindow {
             }
         });
 
-        // Pointer position, for placing the context menu.
+        // Pointer position, for placing the context menu and link tooltips.
         let motion = gtk::EventControllerMotion::new();
         let w = weak.clone();
         motion.connect_motion(move |_, x, y| {
             if let Some(tw) = w.upgrade() {
                 tw.pointer.set((x, y));
+                tw.update_link_tooltip(x, y);
             }
         });
         self.term.add_controller(motion);
+
+        // Ctrl+click on a link opens it in the browser. Plain clicks are
+        // left alone so selecting text works as usual.
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let w = weak.clone();
+        click.connect_pressed(move |g, _, x, y| {
+            let Some(tw) = w.upgrade() else { return };
+            if !g.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
+                return;
+            }
+            if let Some(url) = tw.link_at(x, y) {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                tw.open_url(&url);
+            }
+        });
+        self.term.add_controller(click);
 
         // Mouse buttons. A capture-phase legacy controller sees presses
         // before VTE does, so right/middle clicks can be taken over.
@@ -347,7 +473,8 @@ impl TermWindow {
         });
         self.term.add_controller(legacy);
 
-        // Keyboard shortcuts (PuTTY: Shift+Ins / Ctrl+Ins; Linux: Ctrl+Shift+C/V/N).
+        // Keyboard shortcuts (PuTTY: Shift+Ins / Ctrl+Ins; Linux: Ctrl+Shift+C/V/N/F/P;
+        // zoom: Ctrl+= / Ctrl+- / Ctrl+0).
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let w = weak.clone();
@@ -365,6 +492,17 @@ impl TermWindow {
                 tw.new_window();
             } else if ctrl && shift && k == gdk::Key::p {
                 let _ = WidgetExt::activate_action(&tw.window, "win.change-settings", None);
+            } else if ctrl && shift && k == gdk::Key::f {
+                tw.show_search();
+            } else if ctrl
+                && !alt
+                && (key == gdk::Key::plus || key == gdk::Key::equal || key == gdk::Key::KP_Add)
+            {
+                tw.zoom(1);
+            } else if ctrl && !alt && !shift && (key == gdk::Key::minus || key == gdk::Key::KP_Subtract) {
+                tw.zoom(-1);
+            } else if ctrl && !alt && !shift && (key == gdk::Key::_0 || key == gdk::Key::KP_0) {
+                tw.zoom(0);
             } else if shift && !ctrl && key == gdk::Key::Insert {
                 tw.paste(false);
             } else if ctrl && !shift && key == gdk::Key::Insert {
@@ -431,6 +569,120 @@ impl TermWindow {
         });
     }
 
+    fn connect_search(self: &Rc<Self>, prev_btn: &gtk::Button, next_btn: &gtk::Button) {
+        let w = Rc::downgrade(self);
+        self.search_entry.connect_search_changed(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_update();
+            }
+        });
+        let w = Rc::downgrade(self);
+        self.search_case.connect_toggled(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_update();
+            }
+        });
+        // Enter and the up button go to older output (what you usually want
+        // in a terminal); Ctrl+G / the down button go back towards newer.
+        let w = Rc::downgrade(self);
+        self.search_entry.connect_activate(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_find(true);
+            }
+        });
+        let w = Rc::downgrade(self);
+        self.search_entry.connect_previous_match(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_find(true);
+            }
+        });
+        let w = Rc::downgrade(self);
+        self.search_entry.connect_next_match(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_find(false);
+            }
+        });
+        let w = Rc::downgrade(self);
+        prev_btn.connect_clicked(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_find(true);
+            }
+        });
+        let w = Rc::downgrade(self);
+        next_btn.connect_clicked(move |_| {
+            if let Some(tw) = w.upgrade() {
+                tw.search_find(false);
+            }
+        });
+        // Closing the bar (Escape or ×) clears the highlight and returns focus.
+        let w = Rc::downgrade(self);
+        self.search_bar.connect_search_mode_enabled_notify(move |bar| {
+            if bar.is_search_mode() {
+                return;
+            }
+            if let Some(tw) = w.upgrade() {
+                tw.term.search_set_regex(None, 0);
+                tw.term.unselect_all();
+                tw.term.grab_focus();
+            }
+        });
+    }
+
+    fn show_search(&self) {
+        self.search_bar.set_search_mode(true);
+        self.search_entry.grab_focus();
+        self.search_entry.select_region(0, -1);
+    }
+
+    fn search_update(&self) {
+        let text = self.search_entry.text();
+        self.search_entry.remove_css_class("error");
+        if text.is_empty() {
+            self.term.search_set_regex(None, 0);
+            return;
+        }
+        let mut flags = PCRE2_MULTILINE | PCRE2_UTF;
+        if !self.search_case.is_active() {
+            flags |= PCRE2_CASELESS;
+        }
+        match vte::Regex::for_search(&matching::regex_escape(&text), flags) {
+            Ok(re) => {
+                self.term.search_set_regex(Some(&re), 0);
+                self.term.search_set_wrap_around(true);
+                self.term.unselect_all();
+                self.search_find(true);
+            }
+            Err(_) => self.search_entry.add_css_class("error"),
+        }
+    }
+
+    /// `older == true` searches upwards into the scrollback.
+    fn search_find(&self, older: bool) {
+        if self.search_entry.text().is_empty() {
+            return;
+        }
+        let found = if older {
+            self.term.search_find_previous()
+        } else {
+            self.term.search_find_next()
+        };
+        if found {
+            self.search_entry.remove_css_class("error");
+        } else {
+            self.search_entry.add_css_class("error");
+        }
+    }
+
+    /// Per-window font zoom: 1 bigger, -1 smaller, 0 back to normal.
+    fn zoom(&self, step: i32) {
+        let scale = match step {
+            0 => 1.0,
+            s if s > 0 => self.term.font_scale() * 1.1,
+            _ => self.term.font_scale() / 1.1,
+        };
+        self.term.set_font_scale(scale.clamp(0.3, 4.0));
+    }
+
     fn add_action(self: &Rc<Self>, name: &str, f: impl Fn(&Rc<TermWindow>) + 'static) {
         let a = gio::SimpleAction::new(name, None);
         let w = Rc::downgrade(self);
@@ -466,6 +718,10 @@ impl TermWindow {
             tw.term.set_scrollback_lines(i64::from(n));
         });
         self.add_action("reset", |tw| tw.term.reset(true, false));
+        self.add_action("find", |tw| tw.show_search());
+        self.add_action("zoom-in", |tw| tw.zoom(1));
+        self.add_action("zoom-out", |tw| tw.zoom(-1));
+        self.add_action("zoom-reset", |tw| tw.zoom(0));
         self.add_action("event-log", |tw| tw.show_event_log());
         self.add_action("fullscreen", |tw| tw.toggle_fullscreen());
         self.add_action("new-window", |tw| tw.new_window());

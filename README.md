@@ -7,14 +7,22 @@ Rust with GTK 4 + VTE.
 * **Copy on select** and **right-click paste** are on by default (PuTTY's
   "Compromise" mouse mode).
 * The title bar has a **⚙ Settings** button and a **☰ menu**. The same menu
-  opens with **Ctrl+Right-click**: Copy, Paste, Copy All, New Window, Restart
-  Shell, Settings, Event Log, Clear Scrollback, Reset Terminal, Full Screen,
-  About.
+  opens with **Ctrl+Right-click**: Copy, Paste, Copy All, Find, Zoom, New
+  Window, Restart Shell, Settings, Event Log, Clear Scrollback, Reset
+  Terminal, Full Screen, About.
+* **Find in scrollback** (Ctrl+Shift+F) and **font zoom** (Ctrl+= / Ctrl+- /
+  Ctrl+0).
+* **Ctrl+click opens web links.** Only `http`/`https` links are opened, and
+  the full address is shown in a tooltip first.
+* **Colour schemes:** PuTTY classic, Tango dark/light, Solarized dark/light,
+  Dracula, plus every colour adjustable individually.
 * The settings follow PuTTY's tree: Session (shell, saved sessions, close on
   exit) · Logging · Terminal (Keyboard, Bell, Features) · Window (Appearance,
   Behaviour, Selection, Colours).
-* "Default Settings" applies to every new window. Other saved sessions are
-  settings profiles you can use with `-load`.
+* "Default Settings" applies to every new window. Changes made in the
+  settings window are saved there unless you untick **Save as Default
+  Settings**. Other saved sessions are settings profiles you can use with
+  `-load`.
 
 ## Install on Fedora (COPR)
 
@@ -43,8 +51,8 @@ the only thing you need is **podman** (or docker). Rust, GTK and the
 packaging tools are installed inside the container, not on your machine.
 
 ```sh
-./build-rpm.sh     # Fedora container  -> dist/rpm/moriartty-0.1.0-1.fc*.x86_64.rpm
-./build-deb.sh     # Debian 13 container -> dist/deb/moriartty_0.1.0-1_amd64.deb
+./build-rpm.sh     # Fedora container    -> dist/rpm/moriartty-<version>-1.fc*.x86_64.rpm
+./build-deb.sh     # Debian 13 container -> dist/deb/moriartty_<version>-1_amd64.deb
 ```
 
 You can pass a different image to target another release:
@@ -73,10 +81,16 @@ moriartty -log ~/term.log     # log all output
 
 ## Shortcuts
 
-Ctrl+Shift+C or Ctrl+Insert copies. Ctrl+Shift+V or Shift+Insert pastes.
-Ctrl+Shift+N opens a new window in the same directory. Ctrl+Shift+P opens
-Settings. Alt+Enter toggles full
-screen if you enable it on the Behaviour page.
+| Shortcut | Action |
+|---|---|
+| Ctrl+Shift+C, Ctrl+Insert | Copy |
+| Ctrl+Shift+V, Shift+Insert | Paste |
+| Ctrl+Shift+F | Find in scrollback. Enter goes to older matches, Ctrl+G to newer ones, Escape closes. |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / back to normal (this window only) |
+| Ctrl+click | Open the web link under the pointer |
+| Ctrl+Shift+N | New window in the same directory |
+| Ctrl+Shift+P | Settings |
+| Alt+Enter | Full screen, if enabled on the Behaviour page |
 
 ## Security design
 
@@ -86,8 +100,11 @@ screen if you enable it on the Behaviour page.
   (PRIMARY selection) pastes go through the same filter.
 * **What programs can do to the terminal:** no answerback, no title
   reporting, and no clipboard writes (OSC 52). Window titles set by programs
-  have control characters stripped and their length capped. Hyperlinks are
-  off by default.
+  have control characters stripped and their length capped. OSC 8 hyperlinks
+  are off by default.
+* **Links:** only `http://` and `https://` URLs can be opened, never `file:`
+  or custom schemes. Opening one always takes a Ctrl+click, and the tooltip
+  shows the full address first.
 * **Files:** the config directory is 0700 and session files are 0600, written
   atomically. Symlinks and files owned by other users are refused. Log files
   are 0600 and opened with `O_NOFOLLOW`.

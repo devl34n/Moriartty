@@ -1,6 +1,6 @@
 [package]
 name = "moriartty"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 description = "A PuTTY-style (pterm) terminal emulator for Linux"
@@ -9,7 +9,9 @@ readme = "README.md"
 
 [dependencies]
 gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
-vte = { package = "vte4", version = "0.8" }
+# v0_70: check_match_at / check_hyperlink_at (Ctrl+click links). Moriartty
+# already requires VTE >= 0.76, so this adds no new runtime requirement.
+vte = { package = "vte4", version = "0.8", features = ["v0_70"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 nix = { version = "0.29", features = ["fs", "signal", "process", "user"] }

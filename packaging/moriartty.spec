@@ -1,5 +1,5 @@
 Name:           moriartty
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        PuTTY-style terminal emulator for Linux
 License:        MIT
@@ -66,5 +66,12 @@ cargo test --release --frozen --offline
 %{_datadir}/icons/hicolor/*/apps/io.github.moriartty.Moriartty.png
 
 %changelog
+* Sun Oct 18 2026 Moriartty Developers - 0.2.0-1
+- Settings dialog can save changes as Default Settings
+- Font zoom (Ctrl+= / Ctrl+- / Ctrl+0)
+- Find in scrollback (Ctrl+Shift+F)
+- Ctrl+click opens http(s) links
+- Colour scheme presets
+
 * Sun Oct 18 2026 Moriartty Developers - 0.1.0-1
 - Initial package

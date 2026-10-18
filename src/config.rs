@@ -87,6 +87,53 @@ pub struct Colours {
 impl Default for Colours {
     /// PuTTY's default palette.
     fn default() -> Self {
+        SCHEMES[0].1.clone()
+    }
+}
+
+const TANGO: [Rgb; 16] = [
+    [46, 52, 54],
+    [204, 0, 0],
+    [78, 154, 6],
+    [196, 160, 0],
+    [52, 101, 164],
+    [117, 80, 123],
+    [6, 152, 154],
+    [211, 215, 207],
+    [85, 87, 83],
+    [239, 41, 41],
+    [138, 226, 52],
+    [252, 233, 79],
+    [114, 159, 207],
+    [173, 127, 168],
+    [52, 226, 226],
+    [238, 238, 236],
+];
+
+const SOLARIZED: [Rgb; 16] = [
+    [7, 54, 66],
+    [220, 50, 47],
+    [133, 153, 0],
+    [181, 137, 0],
+    [38, 139, 210],
+    [211, 54, 130],
+    [42, 161, 152],
+    [238, 232, 213],
+    [0, 43, 54],
+    [203, 75, 22],
+    [88, 110, 117],
+    [101, 123, 131],
+    [131, 148, 150],
+    [108, 113, 196],
+    [147, 161, 161],
+    [253, 246, 227],
+];
+
+/// Colour scheme presets offered on the Colours page. The first entry is
+/// the default.
+pub const SCHEMES: &[(&str, Colours)] = &[
+    (
+        "PuTTY (classic)",
         Colours {
             foreground: [187, 187, 187],
             bold_foreground: [255, 255, 255],
@@ -111,9 +158,81 @@ impl Default for Colours {
                 [85, 255, 255],
                 [255, 255, 255],
             ],
-        }
-    }
-}
+        },
+    ),
+    (
+        "Tango Dark",
+        Colours {
+            foreground: [211, 215, 207],
+            bold_foreground: [238, 238, 236],
+            background: [46, 52, 54],
+            cursor_text: [46, 52, 54],
+            cursor: [211, 215, 207],
+            ansi: TANGO,
+        },
+    ),
+    (
+        "Tango Light",
+        Colours {
+            foreground: [46, 52, 54],
+            bold_foreground: [0, 0, 0],
+            background: [255, 255, 255],
+            cursor_text: [255, 255, 255],
+            cursor: [46, 52, 54],
+            ansi: TANGO,
+        },
+    ),
+    (
+        "Solarized Dark",
+        Colours {
+            foreground: [131, 148, 150],
+            bold_foreground: [147, 161, 161],
+            background: [0, 43, 54],
+            cursor_text: [0, 43, 54],
+            cursor: [147, 161, 161],
+            ansi: SOLARIZED,
+        },
+    ),
+    (
+        "Solarized Light",
+        Colours {
+            foreground: [101, 123, 131],
+            bold_foreground: [88, 110, 117],
+            background: [253, 246, 227],
+            cursor_text: [253, 246, 227],
+            cursor: [88, 110, 117],
+            ansi: SOLARIZED,
+        },
+    ),
+    (
+        "Dracula",
+        Colours {
+            foreground: [248, 248, 242],
+            bold_foreground: [255, 255, 255],
+            background: [40, 42, 54],
+            cursor_text: [40, 42, 54],
+            cursor: [248, 248, 242],
+            ansi: [
+                [33, 34, 44],
+                [255, 85, 85],
+                [80, 250, 123],
+                [241, 250, 140],
+                [189, 147, 249],
+                [255, 121, 198],
+                [139, 233, 253],
+                [248, 248, 242],
+                [98, 114, 164],
+                [255, 110, 110],
+                [105, 255, 148],
+                [255, 255, 165],
+                [214, 172, 255],
+                [255, 146, 223],
+                [164, 255, 255],
+                [255, 255, 255],
+            ],
+        },
+    ),
+];
 
 pub const ANSI_NAMES: [&str; 16] = [
     "ANSI Black",
@@ -170,6 +289,7 @@ pub struct Settings {
     // Terminal > Features
     pub no_remote_wintitle: bool,
     pub allow_hyperlinks: bool,
+    pub clickable_urls: bool,
 
     // Window
     pub columns: u16,
@@ -230,6 +350,7 @@ impl Default for Settings {
 
             no_remote_wintitle: false,
             allow_hyperlinks: false,
+            clickable_urls: true,
 
             columns: 80,
             rows: 24,
@@ -295,6 +416,14 @@ mod tests {
         let text = toml::to_string_pretty(&s).unwrap();
         let back: Settings = toml::from_str(&text).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn default_colours_are_the_first_scheme() {
+        assert_eq!(Colours::default(), SCHEMES[0].1);
+        let mut names: Vec<_> = SCHEMES.iter().map(|(n, _)| *n).collect();
+        names.dedup();
+        assert_eq!(names.len(), SCHEMES.len());
     }
 
     #[test]

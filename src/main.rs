@@ -6,6 +6,7 @@
 mod cli;
 mod config;
 mod logging;
+mod matching;
 mod paste;
 mod pty;
 mod storage;
