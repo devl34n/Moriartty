@@ -20,12 +20,13 @@ Rust with GTK 4 + VTE.
 
 ## Install a prebuilt package
 
-Ready-made packages are in [`releases/`](releases/). Check them against
-`SHA256SUMS` first:
+Download the `.rpm` or `.deb` and `SHA256SUMS` from the
+[latest release](https://github.com/devl34n/Moriartty/releases/latest),
+then verify and install from the same folder:
 
-```sh
+```
 sha256sum -c SHA256SUMS --ignore-missing
-sudo dnf install ./moriartty-*.rpm      # Fedora
+sudo dnf install ./moriartty-*.rpm      # Fedora 39+
 sudo apt install ./moriartty_*.deb      # Debian 13+ / Ubuntu 25.04+
 ```
 
