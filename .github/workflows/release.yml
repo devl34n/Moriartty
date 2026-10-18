@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual run for an existing tag (Actions → Release → Run workflow), e.g.
+  # to rebuild and re-upload the packages of a release made by hand.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v0.3.0)'
+        required: true
 
 # Needs write access only to create the release and upload files.
 permissions:
@@ -11,10 +18,13 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       # The build scripts run inside Fedora/Debian containers via podman,
@@ -28,14 +38,28 @@ jobs:
       - name: Collect packages and checksums
         run: |
           mkdir -p out
-          cp dist/rpm/*.rpm dist/deb/*.deb out/
-          cd out && sha256sum * > SHA256SUMS
+          cp dist/deb/*.deb out/
+          for f in dist/rpm/*.rpm; do
+            case "$f" in
+              *-debuginfo-*|*-debugsource-*) ;;   # not useful to end users
+              *) cp "$f" out/ ;;
+            esac
+          done
+          cd out && sha256sum -- * > SHA256SUMS
 
+      # Create the release, or — if it was already created (e.g. by hand) —
+      # upload the packages to it, replacing files with the same name.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" out/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Moriartty $GITHUB_REF_NAME" \
-            --generate-notes
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG exists; uploading packages to it."
+            gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" out/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Moriartty $TAG" \
+              --generate-notes
+          fi
