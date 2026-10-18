@@ -3,6 +3,10 @@
 A PuTTY-style terminal emulator for Linux (think PuTTY's `pterm`), written in
 Rust with GTK 4 + VTE.
 
+![Moriartty terminal window](docs/screenshots/terminal.png)
+
+![Moriartty settings window](docs/screenshots/settings.png)
+
 * Launching opens a terminal running your shell straight away.
 * **Copy on select** and **right-click paste** are on by default (PuTTY's
   "Compromise" mouse mode).
