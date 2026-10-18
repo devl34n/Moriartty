@@ -393,6 +393,7 @@ fn appearance_page(f: &Form, _c: &Ctx) -> gtk::Box {
     f.check(&g, "Cursor blinks", |s| s.cursor_blink, |s, v| s.cursor_blink = v);
     let g = group(&p, "Font settings");
     f.font(&g, "Font used in the terminal window", |s| s.font.clone(), |s, v| s.font = v);
+    f.number(&g, "Zoom (%) — also Ctrl+= / Ctrl+- / Ctrl+0", 30, 400, |s| s.font_zoom, |s, v| s.font_zoom = v);
     let g = group(&p, "Adjust the use of the mouse pointer");
     f.check(&g, "Hide mouse pointer when typing in window", |s| s.hide_mouse, |s, v| s.hide_mouse = v);
     let g = group(&p, "Adjust the window border");
@@ -406,6 +407,8 @@ fn behaviour_page(f: &Form, _c: &Ctx) -> gtk::Box {
     f.entry(&g, "Window title", |s| s.wintitle.clone(), |s, v| s.wintitle = v);
     f.check(&g, "Warn before closing a window with a running program", |s| s.warn_on_close, |s, v| s.warn_on_close = v);
     f.check(&g, "Full screen on Alt-Enter", |s| s.fullscreen_on_alt_enter, |s, v| s.fullscreen_on_alt_enter = v);
+    f.check(&g, "Show settings and menu buttons in the title bar", |s| s.title_buttons, |s, v| s.title_buttons = v);
+    note(&g, "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.");
     p
 }
 

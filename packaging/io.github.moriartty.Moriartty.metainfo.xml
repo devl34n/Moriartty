@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: makes Moriartty show up in GNOME Software / KDE Discover. -->
+<component type="desktop-application">
+  <id>io.github.moriartty.Moriartty</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Moriartty</name>
+  <summary>PuTTY-style terminal emulator</summary>
+  <developer id="io.github.devl34n">
+    <name>devl34n</name>
+  </developer>
+
+  <description>
+    <p>
+      Moriartty is a terminal emulator for people who grew up on PuTTY. It keeps
+      PuTTY's habits — copy on select, right-click paste and the familiar
+      configuration tree — in a native GTK 4 application.
+    </p>
+    <ul>
+      <li>Copy on select and right-click paste, on by default</li>
+      <li>Safe paste: escape sequences and hidden control characters are stripped, multi-line pastes ask first</li>
+      <li>Find in scrollback, font zoom and Ctrl+click web links</li>
+      <li>Colour schemes: PuTTY classic, Tango, Solarized and Dracula</li>
+      <li>Saved settings profiles and session logging</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.moriartty.Moriartty.desktop</launchable>
+
+  <url type="homepage">https://github.com/devl34n/moriartty</url>
+  <url type="bugtracker">https://github.com/devl34n/moriartty/issues</url>
+  <url type="vcs-browser">https://github.com/devl34n/moriartty</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The terminal window</caption>
+      <image>https://raw.githubusercontent.com/devl34n/moriartty/main/docs/screenshots/terminal.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>PuTTY-style settings</caption>
+      <image>https://raw.githubusercontent.com/devl34n/moriartty/main/docs/screenshots/settings.png</image>
+    </screenshot>
+  </screenshots>
+
+  <provides>
+    <binary>moriartty</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.3.0" date="2026-10-18">
+      <description>
+        <ul>
+          <li>Can be chosen as the desktop's default terminal (xdg-terminal-exec, x-terminal-emulator)</li>
+          <li>New -dir and -hold options</li>
+          <li>Font zoom is remembered and can be saved as default</li>
+          <li>Option to hide the title bar buttons</li>
+          <li>Closing a window running an -e program now asks first</li>
+          <li>The terminal now resizes without polling</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-10-18">
+      <description>
+        <p>Find in scrollback, font zoom, Ctrl+click links, colour schemes, settings saved as default.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-10-18">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

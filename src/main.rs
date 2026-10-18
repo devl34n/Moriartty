@@ -66,7 +66,7 @@ fn main() -> glib::ExitCode {
         cli::Launch::Configure(s) => {
             ui::config_dialog::show(app, s.clone(), ui::config_dialog::Mode::New)
         }
-        cli::Launch::Open(s, cmd) => ui::terminal::open(app, s.clone(), cmd.clone(), None),
+        cli::Launch::Open(s, cmd, dir) => ui::terminal::open(app, s.clone(), cmd.clone(), dir.clone()),
         cli::Launch::Help | cli::Launch::Version => {}
     });
 

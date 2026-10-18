@@ -7,7 +7,7 @@ set -euo pipefail
 
 dnf install -y -q --setopt=install_weak_deps=False \
     rust cargo gcc rpm-build gtk4-devel vte291-gtk4-devel \
-    desktop-file-utils ImageMagick tar gzip >/dev/null
+    desktop-file-utils appstream ImageMagick tar gzip >/dev/null
 
 echo "rustc: $(rustc --version)"
 cd /build

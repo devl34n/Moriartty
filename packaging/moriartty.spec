@@ -1,5 +1,5 @@
 Name:           moriartty
-Version:        0.2.0
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        PuTTY-style terminal emulator for Linux
 License:        MIT
@@ -14,6 +14,7 @@ BuildRequires:  gcc
 BuildRequires:  pkgconfig(gtk4) >= 4.12
 BuildRequires:  pkgconfig(vte-2.91-gtk4)
 BuildRequires:  desktop-file-utils
+BuildRequires:  appstream
 # Scales packaging/moriartty-logo.png to the hicolor icon sizes.
 BuildRequires:  ImageMagick
 
@@ -47,6 +48,8 @@ cargo build --release --frozen --offline
 install -Dpm0755 target/release/moriartty %{buildroot}%{_bindir}/moriartty
 install -Dpm0644 packaging/io.github.moriartty.Moriartty.desktop \
     %{buildroot}%{_datadir}/applications/io.github.moriartty.Moriartty.desktop
+install -Dpm0644 packaging/io.github.moriartty.Moriartty.metainfo.xml \
+    %{buildroot}%{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
 for size in 16 24 32 48 64 128 256 512; do
     install -d %{buildroot}%{_datadir}/icons/hicolor/${size}x${size}/apps
     magick packaging/moriartty-logo.png -resize ${size}x${size} \
@@ -55,6 +58,7 @@ done
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.moriartty.Moriartty.desktop
+appstreamcli validate --no-net %{buildroot}%{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
 export RUSTFLAGS="%{?build_rustflags}"
 cargo test --release --frozen --offline
 
@@ -64,8 +68,17 @@ cargo test --release --frozen --offline
 %{_bindir}/moriartty
 %{_datadir}/applications/io.github.moriartty.Moriartty.desktop
 %{_datadir}/icons/hicolor/*/apps/io.github.moriartty.Moriartty.png
+%{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
 
 %changelog
+* Sun Oct 18 2026 Moriartty Developers - 0.3.0-1
+- Usable as the desktop's default terminal (xdg-terminal-exec keys, -dir, -hold)
+- AppStream metadata, so it appears in GNOME Software / KDE Discover
+- Font zoom is remembered and can be saved as default
+- Option to hide the title bar buttons
+- Warn before closing a window running an -e program
+- Resize the pty on layout changes instead of polling
+
 * Sun Oct 18 2026 Moriartty Developers - 0.2.0-1
 - Settings dialog can save changes as Default Settings
 - Font zoom (Ctrl+= / Ctrl+- / Ctrl+0)

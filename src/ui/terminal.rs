@@ -39,6 +39,7 @@ pub struct TermWindow {
     term: vte::Terminal,
     scrollbar: gtk::Scrollbar,
     popover: gtk::PopoverMenu,
+    title_buttons: gtk::Box,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     search_case: gtk::CheckButton,
@@ -136,8 +137,10 @@ impl TermWindow {
         let settings_btn = gtk::Button::from_icon_name("preferences-system-symbolic");
         settings_btn.set_action_name(Some("win.change-settings"));
         settings_btn.set_tooltip_text(Some("Settings (Ctrl+Shift+P)"));
-        header.pack_end(&menu_btn);
-        header.pack_end(&settings_btn);
+        let title_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        title_buttons.append(&settings_btn);
+        title_buttons.append(&menu_btn);
+        header.pack_end(&title_buttons);
         window.set_titlebar(Some(&header));
 
         let term = vte::Terminal::new();
@@ -146,8 +149,38 @@ impl TermWindow {
         term.set_size(i64::from(settings.columns), i64::from(settings.rows));
 
         let scrollbar = gtk::Scrollbar::new(gtk::Orientation::Vertical, term.vadjustment().as_ref());
+
+        // Resize hook without polling: the terminal is overlaid on an
+        // invisible DrawingArea that always gets exactly the same space, and
+        // DrawingArea emits "resize" whenever that space changes (window
+        // resize, maximise, find bar shown, ...). The terminal itself is laid
+        // out right after, so the check runs once GTK has finished the layout
+        // pass. Font and zoom changes call check_size() directly.
+        let on_allocate: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::default();
+        let size_probe = gtk::DrawingArea::new();
+        size_probe.set_can_target(false);
+        size_probe.set_hexpand(true);
+        size_probe.set_vexpand(true);
+        let term_holder = gtk::Overlay::new();
+        term_holder.set_child(Some(&size_probe));
+        term_holder.add_overlay(&term);
+        // The overlay's size request comes from the terminal (its columns and
+        // rows), not from the empty DrawingArea.
+        term_holder.set_measure_overlay(&term, true);
+        {
+            let on_allocate = on_allocate.clone();
+            size_probe.connect_resize(move |_, _, _| {
+                let on_allocate = on_allocate.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(f) = on_allocate.borrow().as_ref() {
+                        f();
+                    }
+                });
+            });
+        }
+
         let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        hbox.append(&term);
+        hbox.append(&term_holder);
         hbox.append(&scrollbar);
 
         // Find bar (Ctrl+Shift+F), hidden until used.
@@ -185,6 +218,7 @@ impl TermWindow {
             term,
             scrollbar,
             popover,
+            title_buttons,
             search_bar,
             search_entry,
             search_case,
@@ -215,6 +249,12 @@ impl TermWindow {
         tw.connect_title_signal();
         tw.connect_search(&prev_btn, &next_btn);
         tw.install_actions();
+        let w = Rc::downgrade(&tw);
+        *on_allocate.borrow_mut() = Some(Box::new(move || {
+            if let Some(tw) = w.upgrade() {
+                tw.check_size();
+            }
+        }));
         tw
     }
 
@@ -261,6 +301,8 @@ impl TermWindow {
             BackspaceKey::ControlQuestion => vte::EraseBinding::AsciiDelete,
         });
         self.scrollbar.set_visible(s.scrollbar);
+        self.title_buttons.set_visible(s.title_buttons);
+        t.set_font_scale(f64::from(s.font_zoom) / 100.0);
         let (border, urls) = (s.window_border, s.clickable_urls);
         drop(s);
         self.set_padding(border);
@@ -673,14 +715,28 @@ impl TermWindow {
         }
     }
 
-    /// Per-window font zoom: 1 bigger, -1 smaller, 0 back to normal.
-    fn zoom(&self, step: i32) {
-        let scale = match step {
-            0 => 1.0,
-            s if s > 0 => self.term.font_scale() * 1.1,
-            _ => self.term.font_scale() / 1.1,
+    /// Font zoom: 1 bigger, -1 smaller, 0 back to normal. Stored in this
+    /// window's settings, so New Window inherits it and the settings dialog
+    /// can save it as the default.
+    fn zoom(self: &Rc<Self>, step: i32) {
+        let zoom = {
+            let mut s = self.settings.borrow_mut();
+            s.font_zoom = next_zoom(s.font_zoom, step);
+            s.font_zoom
         };
-        self.term.set_font_scale(scale.clamp(0.3, 4.0));
+        self.term.set_font_scale(f64::from(zoom) / 100.0);
+        self.check_size_after_layout();
+    }
+
+    /// Font/zoom changes alter the column/row count without changing the
+    /// widget's size, so the resize hook doesn't fire for them.
+    fn check_size_after_layout(self: &Rc<Self>) {
+        let w = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            if let Some(tw) = w.upgrade() {
+                tw.check_size();
+            }
+        });
     }
 
     fn add_action(self: &Rc<Self>, name: &str, f: impl Fn(&Rc<TermWindow>) + 'static) {
@@ -856,7 +912,9 @@ impl TermWindow {
                     },
                 );
                 *self.io_src.borrow_mut() = Some(id);
-                self.start_resize_watch(gen);
+                // The pty was created at this size; later changes arrive
+                // through the layout hook (check_size).
+                self.last_size.set((cols, rows));
                 self.term.grab_focus();
             }
             Err(e) => {
@@ -867,19 +925,6 @@ impl TermWindow {
                 self.update_title();
             }
         }
-    }
-
-    fn start_resize_watch(self: &Rc<Self>, gen: u32) {
-        self.last_size.set((0, 0));
-        let w = Rc::downgrade(self);
-        glib::timeout_add_local(Duration::from_millis(150), move || {
-            let Some(tw) = w.upgrade() else { return glib::ControlFlow::Break };
-            if tw.ended.get() || tw.generation.get() != gen {
-                return glib::ControlFlow::Break;
-            }
-            tw.check_size();
-            glib::ControlFlow::Continue
-        });
     }
 
     fn check_size(&self) {
@@ -1077,6 +1122,7 @@ impl TermWindow {
     fn reconfigure(self: &Rc<Self>, new: Settings) {
         *self.settings.borrow_mut() = new;
         self.apply_appearance();
+        self.check_size_after_layout();
         self.update_title();
         self.log_event("Settings changed (shell and logging changes apply on restart)");
     }

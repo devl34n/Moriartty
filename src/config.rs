@@ -303,6 +303,8 @@ pub struct Settings {
     pub cursor: CursorType,
     pub cursor_blink: bool,
     pub font: String,
+    /// Font zoom in percent (Ctrl+= / Ctrl+- / Ctrl+0), 100 = normal.
+    pub font_zoom: u32,
     pub hide_mouse: bool,
     pub window_border: u16,
 
@@ -310,6 +312,8 @@ pub struct Settings {
     pub wintitle: String,
     pub warn_on_close: bool,
     pub fullscreen_on_alt_enter: bool,
+    /// Settings (gear) and menu buttons in the title bar.
+    pub title_buttons: bool,
 
     // Window > Selection
     pub mouse_action: MouseAction,
@@ -362,12 +366,14 @@ impl Default for Settings {
             cursor: CursorType::Block,
             cursor_blink: false,
             font: "Monospace 12".into(),
+            font_zoom: 100,
             hide_mouse: true,
             window_border: 1,
 
             wintitle: String::new(),
             warn_on_close: true,
             fullscreen_on_alt_enter: false,
+            title_buttons: true,
 
             mouse_action: MouseAction::Compromise,
             copy_on_select: true,
@@ -381,6 +387,18 @@ impl Default for Settings {
     }
 }
 
+/// Zoom levels in percent, like a web browser's.
+pub const ZOOM_STEPS: &[u32] = &[30, 50, 67, 80, 90, 100, 110, 120, 133, 150, 170, 200, 240, 300, 400];
+
+/// Next zoom level up (`step > 0`), down (`step < 0`) or back to 100 %.
+pub fn next_zoom(current: u32, step: i32) -> u32 {
+    match step {
+        0 => 100,
+        s if s > 0 => ZOOM_STEPS.iter().copied().find(|&z| z > current).unwrap_or(current),
+        _ => ZOOM_STEPS.iter().rev().copied().find(|&z| z < current).unwrap_or(current),
+    }
+}
+
 impl Settings {
     /// Clamp numbers into sane ranges. Applied to every file loaded from disk.
     pub fn sanitize(&mut self) {
@@ -388,6 +406,7 @@ impl Settings {
         self.rows = self.rows.clamp(1, 500);
         self.scrollback = self.scrollback.min(1_000_000);
         self.window_border = self.window_border.min(64);
+        self.font_zoom = self.font_zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
         self.bell_overload_n = self.bell_overload_n.clamp(1, 1000);
         self.bell_overload_t = self.bell_overload_t.clamp(1, 3600);
         self.bell_overload_s = self.bell_overload_s.clamp(1, 3600);
@@ -416,6 +435,17 @@ mod tests {
         let text = toml::to_string_pretty(&s).unwrap();
         let back: Settings = toml::from_str(&text).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn zoom_steps() {
+        assert_eq!(next_zoom(100, 1), 110);
+        assert_eq!(next_zoom(100, -1), 90);
+        assert_eq!(next_zoom(105, 1), 110);
+        assert_eq!(next_zoom(105, -1), 100);
+        assert_eq!(next_zoom(400, 1), 400);
+        assert_eq!(next_zoom(30, -1), 30);
+        assert_eq!(next_zoom(240, 0), 100);
     }
 
     #[test]

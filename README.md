@@ -10,12 +10,15 @@ Rust with GTK 4 + VTE.
 * Launching opens a terminal running your shell straight away.
 * **Copy on select** and **right-click paste** are on by default (PuTTY's
   "Compromise" mouse mode).
-* The title bar has a **⚙ Settings** button and a **☰ menu**. The same menu
-  opens with **Ctrl+Right-click**: Copy, Paste, Copy All, Find, Zoom, New
-  Window, Restart Shell, Settings, Event Log, Clear Scrollback, Reset
-  Terminal, Full Screen, About.
+* The title bar has a **⚙ Settings** button and a **☰ menu**, which you can
+  hide for a minimal look. The same menu opens with **Ctrl+Right-click**:
+  Copy, Paste, Copy All, Find, Zoom, New Window, Restart Shell, Settings,
+  Event Log, Clear Scrollback, Reset Terminal, Full Screen, About.
 * **Find in scrollback** (Ctrl+Shift+F) and **font zoom** (Ctrl+= / Ctrl+- /
-  Ctrl+0).
+  Ctrl+0). New windows inherit the zoom level, and it can be saved as the
+  default.
+* **Works as your desktop's default terminal**, for "Open in Terminal" and
+  apps that need a terminal (see below).
 * **Ctrl+click opens web links.** Only `http`/`https` links are opened, and
   the full address is shown in a tooltip first.
 * **Colour schemes:** PuTTY classic, Tango dark/light, Solarized dark/light,
@@ -79,8 +82,26 @@ moriartty                     # terminal with your shell
 moriartty -config             # settings window first
 moriartty -load "big font"    # use a saved session
 moriartty -geometry 120x40 -title build -e make -j8
+moriartty -dir ~/src -e make  # start in a directory
+moriartty -hold -e ./test.sh  # keep the window open after the program exits
 moriartty -ls                 # login shell
 moriartty -log ~/term.log     # log all output
+```
+
+## Make Moriartty the default terminal
+
+**Newer GNOME, KDE and others (`xdg-terminal-exec`):** put Moriartty's
+desktop ID first in `~/.config/xdg-terminals.list`:
+
+```sh
+echo io.github.moriartty.Moriartty.desktop > ~/.config/xdg-terminals.list
+```
+
+**Debian / Ubuntu (`x-terminal-emulator`):** the `.deb` registers Moriartty
+as an alternative. To select it:
+
+```sh
+sudo update-alternatives --config x-terminal-emulator
 ```
 
 ## Shortcuts
@@ -90,7 +111,7 @@ moriartty -log ~/term.log     # log all output
 | Ctrl+Shift+C, Ctrl+Insert | Copy |
 | Ctrl+Shift+V, Shift+Insert | Paste |
 | Ctrl+Shift+F | Find in scrollback. Enter goes to older matches, Ctrl+G to newer ones, Escape closes. |
-| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / back to normal (this window only) |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / back to normal |
 | Ctrl+click | Open the web link under the pointer |
 | Ctrl+Shift+N | New window in the same directory |
 | Ctrl+Shift+P | Settings |

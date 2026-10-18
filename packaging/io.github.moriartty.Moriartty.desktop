@@ -10,6 +10,12 @@ Categories=System;TerminalEmulator;GTK;
 Keywords=terminal;shell;console;command;prompt;putty;pterm;
 StartupNotify=true
 Actions=new-window;settings;
+# How desktops (xdg-terminal-exec: "Open in Terminal", Terminal=true apps)
+# pass a command, title, directory and "hold" to this terminal.
+X-TerminalArgExec=-e
+X-TerminalArgTitle=-title
+X-TerminalArgDir=-dir
+X-TerminalArgHold=-hold
 
 [Desktop Action new-window]
 Name=New Window

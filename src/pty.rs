@@ -30,6 +30,8 @@ pub enum ExitState {
 pub struct Pty {
     master: File,
     child: Option<Child>,
+    /// True for the shell, false for an `-e` program.
+    is_shell: bool,
 }
 
 fn login_shell() -> PathBuf {
@@ -55,6 +57,7 @@ pub fn spawn(
     cols: u16,
     rows: u16,
 ) -> Result<(Pty, String), String> {
+    let is_shell = !matches!(command, Some([_, ..]));
     let (mut cmd, desc) = match command {
         Some([prog, args @ ..]) => {
             let mut c = Command::new(prog);
@@ -97,7 +100,7 @@ pub fn spawn(
 
     let (master, child) = sys::spawn_on_pty(cmd, cols.max(1), rows.max(1))
         .map_err(|e| format!("Cannot start program: {e}"))?;
-    Ok((Pty { master, child: Some(child) }, desc))
+    Ok((Pty { master, child: Some(child), is_shell }, desc))
 }
 
 impl Pty {
@@ -136,9 +139,14 @@ impl Pty {
         self.child.as_ref().and_then(|c| i32::try_from(c.id()).ok())
     }
 
-    /// True when something other than the shell owns the terminal
-    /// (e.g. vim, a build, ssh) — used for "warn before closing".
+    /// True when a program is running that closing would kill — used for
+    /// "warn before closing". For the shell that means something other than
+    /// the shell owns the terminal (vim, a build, ssh); an `-e` program is
+    /// itself the thing the user is running, so it always counts while alive.
     pub fn has_foreground_job(&self) -> bool {
+        if !self.is_shell {
+            return self.child.is_some();
+        }
         match (self.pid(), sys::foreground_pgrp(self.master.as_raw_fd())) {
             (Some(pid), Ok(pgrp)) => pgrp != pid,
             _ => true,

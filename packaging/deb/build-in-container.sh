@@ -31,6 +31,8 @@ rm -rf "$ROOT"
 install -Dm0755 -s target/release/$NAME "$ROOT/usr/bin/$NAME"
 install -Dm0644 packaging/io.github.moriartty.Moriartty.desktop \
     "$ROOT/usr/share/applications/io.github.moriartty.Moriartty.desktop"
+install -Dm0644 packaging/io.github.moriartty.Moriartty.metainfo.xml \
+    "$ROOT/usr/share/metainfo/io.github.moriartty.Moriartty.metainfo.xml"
 
 MAGICK=convert
 command -v magick >/dev/null && MAGICK=magick
@@ -73,6 +75,7 @@ Architecture: $ARCH
 Maintainer: Moriartty Developers <moriartty@localhost>
 Installed-Size: $SIZE
 Depends: $DEPENDS
+Provides: x-terminal-emulator
 Section: x11
 Priority: optional
 Description: PuTTY-style terminal emulator
@@ -81,6 +84,26 @@ Description: PuTTY-style terminal emulator
  Window, Appearance, Behaviour, Selection, Colours), saved setting profiles,
  copy-on-select and right-click paste, with safe paste filtering.
 EOF
+
+# Register as an x-terminal-emulator alternative (Debian's default-terminal
+# mechanism; -e and -T are supported as its policy requires). Priority 20 is
+# low, so installing Moriartty never silently replaces the user's choice.
+cat > "$ROOT/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    update-alternatives --install /usr/bin/x-terminal-emulator \
+        x-terminal-emulator /usr/bin/moriartty 20
+fi
+EOF
+cat > "$ROOT/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    update-alternatives --remove x-terminal-emulator /usr/bin/moriartty
+fi
+EOF
+chmod 0755 "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
 
 DEB="/out/${NAME}_${VERSION}-${REVISION}_${ARCH}.deb"
 dpkg-deb --root-owner-group -Zxz --build "$ROOT" "$DEB"
