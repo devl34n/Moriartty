@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Needs write access only to create the release and upload files.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      # The build scripts run inside Fedora/Debian containers via podman,
+      # so the runner's old GTK/VTE doesn't matter here.
+      - name: Build RPM (Fedora container)
+        run: bash ./build-rpm.sh
+
+      - name: Build DEB (Debian 13 container)
+        run: bash ./build-deb.sh
+
+      - name: Collect packages and checksums
+        run: |
+          mkdir -p out
+          cp dist/rpm/*.rpm dist/deb/*.deb out/
+          cd out && sha256sum * > SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Moriartty $GITHUB_REF_NAME" \
+            --generate-notes
