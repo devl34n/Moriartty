@@ -3,6 +3,8 @@
 A PuTTY-style terminal emulator for Linux (think PuTTY's `pterm`), written in
 Rust with GTK 4 + VTE.
 
+<img width="825" height="649" alt="image" src="https://github.com/user-attachments/assets/e29fcc7f-e2a4-4b30-a62a-f2eb6794032d" />
+
 * Launching opens a terminal running your shell straight away.
 * **Copy on select** and **right-click paste** are on by default (PuTTY's
   "Compromise" mouse mode).
