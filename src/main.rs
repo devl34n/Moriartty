@@ -20,7 +20,9 @@ use gtk::{gio, glib};
 pub const APP_ID: &str = "io.github.moriartty.Moriartty";
 
 fn main() -> glib::ExitCode {
-    sys::harden_process();
+    if let Err(e) = sys::harden_process() {
+        eprintln!("moriartty: warning: cannot make the process non-dumpable: {e}");
+    }
 
     let args: Vec<String> = match std::env::args_os()
         .skip(1)

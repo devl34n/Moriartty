@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Install build dependencies (Fedora)
         if: startsWith(matrix.image, 'registry.fedoraproject.org')
-        run: dnf install -y --setopt=install_weak_deps=False rust cargo gcc gtk4-devel vte291-gtk4-devel git
+        run: dnf install -y --setopt=install_weak_deps=False rust cargo clippy gcc gtk4-devel vte291-gtk4-devel git
 
       - name: Install build dependencies (Debian)
         if: startsWith(matrix.image, 'docker.io/library/debian')
@@ -44,3 +44,25 @@ jobs:
 
       - name: Test
         run: cargo test --release --locked
+
+      # Lints: likely bugs and suspicious code fail the build; style
+      # suggestions are only reported. Fedora only (it packages clippy).
+      - name: Clippy
+        if: startsWith(matrix.image, 'registry.fedoraproject.org')
+        run: cargo clippy --release --locked --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+  audit:
+    name: Dependency audit (advisories, licences, sources)
+    # Reads only Cargo.lock / crate metadata, so no GTK or VTE needed here.
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+
+      - name: cargo deny
+        run: cargo deny check

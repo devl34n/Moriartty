@@ -419,9 +419,34 @@ impl Settings {
             validate::program(&self.shell)?;
         }
         if self.log_type != LogType::None {
-            validate::path(&self.log_file).map_err(|e| format!("Log file: {e}"))?;
+            validate::log_path(&self.log_file).map_err(|e| format!("Log file: {e}"))?;
         }
         Ok(())
+    }
+
+    /// Replace values that `validate` would reject with safe fallbacks, so a
+    /// saved file that went bad (say, its shell was uninstalled) can never
+    /// stop a terminal from starting. Returns one message per change.
+    pub fn repair(&mut self) -> Vec<String> {
+        let mut notes = Vec::new();
+        if let Err(e) = validate::term_type(&self.term_type) {
+            let fallback = Settings::default().term_type;
+            notes.push(format!("{e}; using {fallback}"));
+            self.term_type = fallback;
+        }
+        if !self.shell.is_empty() {
+            if let Err(e) = validate::program(&self.shell) {
+                notes.push(format!("{e}; using your login shell instead"));
+                self.shell.clear();
+            }
+        }
+        if self.log_type != LogType::None {
+            if let Err(e) = validate::log_path(&self.log_file) {
+                notes.push(format!("Log file: {e}; logging disabled"));
+                self.log_type = LogType::None;
+            }
+        }
+        notes
     }
 }
 
@@ -454,6 +479,23 @@ mod tests {
         let mut names: Vec<_> = SCHEMES.iter().map(|(n, _)| *n).collect();
         names.dedup();
         assert_eq!(names.len(), SCHEMES.len());
+    }
+
+    #[test]
+    fn repair_falls_back_instead_of_failing() {
+        let mut s = Settings {
+            shell: "/nonexistent/zsh".into(),
+            term_type: "bad\nterm".into(),
+            log_type: LogType::All,
+            log_file: "relative.log".into(),
+            ..Settings::default()
+        };
+        assert_eq!(s.repair().len(), 3);
+        assert!(s.shell.is_empty());
+        assert_eq!(s.term_type, "xterm-256color");
+        assert_eq!(s.log_type, LogType::None);
+        assert!(s.validate().is_ok());
+        assert!(s.repair().is_empty());
     }
 
     #[test]

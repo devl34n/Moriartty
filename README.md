@@ -8,11 +8,15 @@ Rust with GTK 4 + VTE.
 ![Moriartty settings window](docs/screenshots/settings.png)
 
 * Launching opens a terminal running your shell straight away.
+* **Tabs**, in a single slim title bar. Click the **+** right after the
+  tabs for a new one (or Ctrl+Shift+T); middle-click a tab to close it. Tabs are named like kitty's: the title the program sets, otherwise
+  "program: directory" (`bash: ~/src`, `vim: ~/src`). A bell in a
+  background tab makes its name bold.
 * **Copy on select** and **right-click paste** are on by default (PuTTY's
   "Compromise" mouse mode).
-* The title bar has a **⚙ Settings** button and a **☰ menu**, which you can
-  hide for a minimal look. The same menu opens with **Ctrl+Right-click**:
-  Copy, Paste, Copy All, Find, Zoom, New Window, Restart Shell, Settings,
+* The title bar has the tabs, a **⚙ Settings** button and a **☰ menu**; the
+  two buttons can be hidden for a minimal look. The same menu opens with **Ctrl+Right-click**:
+  Copy, Paste, Copy All, Find, Zoom, New Tab, New Window, Close Tab, Restart Shell, Settings,
   Event Log, Clear Scrollback, Reset Terminal, Full Screen, About.
 * **Find in scrollback** (Ctrl+Shift+F) and **font zoom** (Ctrl+= / Ctrl+- /
   Ctrl+0). New windows inherit the zoom level, and it can be saved as the
@@ -42,10 +46,13 @@ Updates then arrive with normal `dnf upgrade`.
 
 ## Install a prebuilt package
 
-Ready-made packages are in [`releases/`](releases/). Check them against
-`SHA256SUMS` first:
+Ready-made packages are in [`releases/`](releases/). From 0.4.1 on,
+`SHA256SUMS` is signed. Check the signature, then the packages:
 
 ```sh
+gpg --import signing-key.asc                # once; compare the fingerprint
+                                            # with the one the author publishes
+gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 sudo dnf install ./moriartty-*.rpm      # Fedora
 sudo apt install ./moriartty_*.deb      # Debian 13+ / Ubuntu 25.04+
@@ -74,6 +81,10 @@ Fedora 39+, Debian 13+ or Ubuntu 25.04+. Debian 12 and Ubuntu 24.04 are too
 old.
 
 For development with a local toolchain: `cargo run`, `cargo test`.
+
+To publish a release, build the packages, then run
+`./sign-release.sh you@example.org`. It copies them into `releases/`,
+rewrites `SHA256SUMS` and signs it with your GPG key.
 
 ## Command line
 
@@ -113,6 +124,11 @@ sudo update-alternatives --config x-terminal-emulator
 | Ctrl+Shift+F | Find in scrollback. Enter goes to older matches, Ctrl+G to newer ones, Escape closes. |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / back to normal |
 | Ctrl+click | Open the web link under the pointer |
+| Ctrl+Shift+T | New tab in the same directory |
+| Ctrl+Shift+W | Close tab (asks first if a program is running) |
+| Ctrl+PgUp / Ctrl+PgDn, Ctrl+Shift+Tab / Ctrl+Tab | Previous / next tab (with two or more tabs) |
+| Ctrl+Shift+PgUp / Ctrl+Shift+PgDn | Move tab left / right |
+| Alt+1 … Alt+9 | Go to tab 1–9 (with two or more tabs) |
 | Ctrl+Shift+N | New window in the same directory |
 | Ctrl+Shift+P | Settings |
 | Alt+Enter | Full screen, if enabled on the Behaviour page |
@@ -121,21 +137,32 @@ sudo update-alternatives --config x-terminal-emulator
 
 * **Paste:** escape and other control characters are stripped. The
   bracketed-paste terminator is always removed, so pasted text can't escape
-  bracketed-paste mode. Multi-line pastes ask for confirmation. Middle-click
+  bracketed-paste mode. Multi-line pastes ask for confirmation (Cancel is
+  the default button); the preview spells out invisible and
+  direction-changing characters and says how much is not shown. A paste
+  is dropped if the shell was restarted in the meantime. Middle-click
   (PRIMARY selection) pastes go through the same filter.
 * **What programs can do to the terminal:** no answerback, no title
   reporting, and no clipboard writes (OSC 52). Window titles set by programs
   have control characters stripped and their length capped. OSC 8 hyperlinks
   are off by default.
 * **Links:** only `http://` and `https://` URLs can be opened, never `file:`
-  or custom schemes. Opening one always takes a Ctrl+click, and the tooltip
-  shows the full address first.
+  or custom schemes, and never links with a user name before the host
+  (`https://bank.example@evil.example/`). Opening one always takes a
+  Ctrl+click, and the tooltip shows the full address first. For
+  international host names, which can imitate other sites letter for
+  letter, the tooltip also shows the real `xn--` host.
 * **Files:** the config directory is 0700 and session files are 0600, written
   atomically. Symlinks and files owned by other users are refused. Log files
-  are 0600 and opened with `O_NOFOLLOW`.
+  must have an absolute path, are 0600, are opened with `O_NOFOLLOW` and
+  without blocking on FIFOs, and are only emptied after those checks pass.
+* **Bad settings never lock you out:** if a saved shell, terminal type or
+  log file becomes invalid, the terminal falls back to a safe value and says
+  so, instead of refusing to start.
 * **Running programs:** the shell and `-e` commands are started directly,
   never through an extra `sh -c`. A custom shell must be an absolute path to
-  an executable.
+  an executable. The pty is created close-on-exec from the start, and
+  launcher variables such as `XDG_ACTIVATION_TOKEN` are not passed on.
 * **Process:** Moriartty is non-dumpable (`PR_SET_DUMPABLE=0`), so there are
   no core dumps of your scrollback and other programs running as you can't
   ptrace it. All `unsafe` code is in `src/sys.rs`. Release builds keep

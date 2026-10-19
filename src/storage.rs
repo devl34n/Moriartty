@@ -95,6 +95,9 @@ pub fn read_private_file(path: &Path) -> Result<String, String> {
     if m.len() > MAX_FILE {
         return Err(format!("{} is too large", path.display()));
     }
+    if m.mode() & 0o077 != 0 {
+        f.set_permissions(Permissions::from_mode(0o600)).map_err(err)?;
+    }
     let mut s = String::new();
     f.take(MAX_FILE).read_to_string(&mut s).map_err(err)?;
     Ok(s)

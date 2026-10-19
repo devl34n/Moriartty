@@ -2,9 +2,12 @@
 //! of libc calls (pty creation, terminal ioctls, process hardening).
 #![allow(unsafe_code)]
 
-use std::fs::File;
+use std::ffi::{CStr, OsStr};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 
@@ -18,18 +21,26 @@ fn check(r: libc::c_int) -> io::Result<libc::c_int> {
 
 /// Make the process non-dumpable: no core files containing scrollback, and
 /// other same-user processes cannot ptrace us to read terminal contents.
-pub fn harden_process() {
+pub fn harden_process() -> io::Result<()> {
     // SAFETY: PR_SET_DUMPABLE takes plain integer arguments and touches no memory.
-    let _ = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong) };
+    check(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong) })?;
+    Ok(())
 }
 
-pub fn set_cloexec(fd: RawFd) -> io::Result<()> {
-    // SAFETY: fcntl on a valid fd with integer arguments.
-    unsafe {
-        let flags = check(libc::fcntl(fd, libc::F_GETFD))?;
-        check(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC))?;
-    }
-    Ok(())
+// From libvte, which vte4 already links; the Rust bindings don't wrap them.
+extern "C" {
+    fn vte_get_major_version() -> libc::c_uint;
+    fn vte_get_minor_version() -> libc::c_uint;
+    fn vte_get_micro_version() -> libc::c_uint;
+}
+
+/// The running libvte's version as VTE_VERSION spells it (0.78.2 -> 7802).
+pub fn vte_version() -> u32 {
+    // SAFETY: the three functions take no arguments and only return
+    // constants compiled into libvte.
+    let (major, minor, micro) =
+        unsafe { (vte_get_major_version(), vte_get_minor_version(), vte_get_micro_version()) };
+    major * 10_000 + minor * 100 + micro
 }
 
 pub fn set_nonblocking(fd: RawFd) -> io::Result<()> {
@@ -66,33 +77,36 @@ pub fn foreground_pgrp(fd: RawFd) -> io::Result<i32> {
 
 /// Spawn `cmd` as a session leader whose controlling terminal is a fresh pty.
 /// Returns the (non-blocking, close-on-exec) master side and the child.
+///
+/// Both pty fds are created close-on-exec (not marked afterwards, as
+/// openpty would need), so a fork+exec on another thread — GIO starts some —
+/// can never inherit them.
 pub fn spawn_on_pty(mut cmd: Command, cols: u16, rows: u16) -> io::Result<(File, Child)> {
-    let ws = libc::winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let mut master: libc::c_int = -1;
-    let mut slave: libc::c_int = -1;
-    // SAFETY: openpty writes two fds into the out-parameters; name and termios
-    // may be null, and `ws` is a valid winsize for the duration of the call.
-    check(unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            &ws,
-        )
-    })?;
-    // SAFETY: openpty succeeded, so both descriptors are open and owned only by us.
+    // SAFETY: posix_openpt takes only flags and returns a new fd or -1.
+    let master = check(unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) })?;
+    // SAFETY: posix_openpt succeeded, so the descriptor is open and owned only by us.
     let master = unsafe { OwnedFd::from_raw_fd(master) };
+    // SAFETY: grantpt and unlockpt take a pty master fd and touch no memory.
+    check(unsafe { libc::grantpt(master.as_raw_fd()) })?;
     // SAFETY: as above.
-    let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+    check(unsafe { libc::unlockpt(master.as_raw_fd()) })?;
+    let mut name = [0u8; 128];
+    // SAFETY: ptsname_r writes a NUL-terminated name of at most `name.len()`
+    // bytes into the buffer, which is valid for the call.
+    let r = unsafe { libc::ptsname_r(master.as_raw_fd(), name.as_mut_ptr().cast(), name.len()) };
+    if r != 0 {
+        return Err(io::Error::from_raw_os_error(r));
+    }
+    let name = CStr::from_bytes_until_nul(&name)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pty name is not terminated"))?;
+    let slave: OwnedFd = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC)
+        .open(OsStr::from_bytes(name.to_bytes()))?
+        .into();
 
-    set_cloexec(master.as_raw_fd())?;
-    set_cloexec(slave.as_raw_fd())?;
+    set_winsize(master.as_raw_fd(), cols, rows)?;
     set_nonblocking(master.as_raw_fd())?;
 
     let out = slave.try_clone()?;

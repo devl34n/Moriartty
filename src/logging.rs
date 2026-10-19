@@ -22,7 +22,7 @@ fn now(fmt: &str) -> String {
 /// Expand PuTTY's log-name placeholders: &Y year, &M month, &D day,
 /// &T time, && literal '&'. (&H expands to "local", &P to the process id.)
 pub fn expand_path(pattern: &str) -> Result<PathBuf, String> {
-    validate::path(pattern)?;
+    validate::log_path(pattern)?;
     let mut out = String::new();
     let mut chars = pattern.chars();
     while let Some(c) = chars.next() {
@@ -48,18 +48,19 @@ pub fn expand_path(pattern: &str) -> Result<PathBuf, String> {
     Ok(validate::expand_tilde(&out))
 }
 
+/// O_NONBLOCK: opening a FIFO for writing would otherwise block (on the GTK
+/// main thread) until something reads it; it has no effect on the regular
+/// files we accept. O_NOCTTY: a tty device must never become our
+/// controlling terminal. There is no O_TRUNC: the file is only emptied once
+/// it has passed the checks below.
 pub fn open_log(path: &Path, append: bool) -> io::Result<File> {
-    let mut o = OpenOptions::new();
-    o.write(true)
+    let f = OpenOptions::new()
+        .write(true)
+        .append(append)
         .create(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    if append {
-        o.append(true);
-    } else {
-        o.truncate(true);
-    }
-    let f = o.open(path)?;
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NOCTTY | libc::O_NONBLOCK)
+        .open(path)?;
     let m = f.metadata()?;
     if !m.is_file() {
         return Err(io::Error::new(io::ErrorKind::Other, "not a regular file"));
@@ -69,6 +70,9 @@ pub fn open_log(path: &Path, append: bool) -> io::Result<File> {
     }
     if m.mode() & 0o077 != 0 {
         f.set_permissions(Permissions::from_mode(0o600))?;
+    }
+    if !append {
+        f.set_len(0)?;
     }
     Ok(f)
 }

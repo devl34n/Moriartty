@@ -1,5 +1,5 @@
 Name:           moriartty
-Version:        0.3.0
+Version:        0.4.4
 Release:        1%{?dist}
 Summary:        PuTTY-style terminal emulator for Linux
 License:        MIT
@@ -71,6 +71,30 @@ cargo test --release --frozen --offline
 %{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
 
 %changelog
+* Mon Oct 19 2026 Moriartty Developers - 0.4.4-1
+- The × on a tab closes it again
+
+* Mon Oct 19 2026 Moriartty Developers - 0.4.3-1
+- Title bar about 22px high: smaller icons, window controls and tabs
+- Empty title bar space no longer opens a tab (clashed with double-click);
+  the + button next to the tabs does
+
+* Mon Oct 19 2026 Moriartty Developers - 0.4.2-1
+- One slim title bar with the tabs in it, always shown
+- Click next to the tabs or on + for a new tab; middle-click closes a tab
+- Tabs are named after the program's title, else "program: directory"
+- Tab shortcuts work wherever the keyboard focus is; Ctrl+Tab switches tabs
+
+* Mon Oct 19 2026 Moriartty Developers - 0.4.1-1
+- Tabs: Ctrl+Shift+T / Ctrl+Shift+W, Ctrl+PgUp/PgDn, Ctrl+Shift+PgUp/PgDn, Alt+1..9
+- A bad saved shell, terminal type or log file no longer stops Moriartty starting
+- Paste confirmation defaults to Cancel and shows hidden characters
+- Pastes are dropped if the shell was restarted in the meantime
+- Links with a user name before the host are refused
+- Link tooltips show the real (xn--) host of international domain names
+- The Event Log window updates live; VTE_VERSION is set for the shell
+- Log files: no blocking on FIFOs, emptied only after the safety checks
+- Pty created close-on-exec; launcher variables not passed to the shell
 * Sun Oct 18 2026 Moriartty Developers - 0.3.0-1
 - Usable as the desktop's default terminal (xdg-terminal-exec keys, -dir, -hold)
 - AppStream metadata, so it appears in GNOME Software / KDE Discover

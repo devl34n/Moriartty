@@ -48,6 +48,19 @@ fn parse_geometry(s: &mut Settings, g: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `-log FILE`: a relative name is taken relative to the current directory,
+/// like any other command-line file argument.
+fn absolute_log_file(f: &str) -> Result<String, String> {
+    validate::path(f)?;
+    if validate::expand_tilde(f).is_absolute() {
+        return Ok(f.to_string());
+    }
+    let cwd = std::env::current_dir().map_err(|e| format!("-log: {e}"))?;
+    let cwd = cwd.to_str().ok_or("-log: current directory is not valid UTF-8")?;
+    // '&' starts a placeholder in log names; keep the directory literal.
+    Ok(format!("{}/{f}", cwd.replace('&', "&&")))
+}
+
 fn parse_dir(d: &str) -> Result<PathBuf, String> {
     validate::path(d)?;
     let p = validate::expand_tilde(d);
@@ -85,7 +98,7 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
             "-ls" => s.login_shell = true,
             "-log" => {
                 s.log_type = LogType::All;
-                s.log_file = val("-log")?;
+                s.log_file = absolute_log_file(&val("-log")?)?;
             }
             "-e" => {
                 let rest: Vec<String> = it.by_ref().cloned().collect();
@@ -99,8 +112,10 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
         }
     }
 
+    // No validate() here: values from saved files are repaired when the
+    // terminal starts (Settings::repair), and the settings window checks
+    // them on Open, so a bad saved file can't lock the user out.
     s.sanitize();
-    s.validate()?;
     if configure {
         return Ok(Launch::Configure(s));
     }

@@ -273,6 +273,10 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
             }
             let mut s = f.get();
             s.sanitize();
+            if let Err(e) = s.validate() {
+                ui::message(&w, "Invalid settings", &e);
+                return;
+            }
             match storage::save_session(&n, &s) {
                 Ok(()) => fill_sessions(&list),
                 Err(e) => ui::message(&w, "Could not save session", &e),
@@ -340,7 +344,9 @@ fn keyboard_page(f: &Form, _c: &Ctx) -> gtk::Box {
         &g,
         "Shortcuts: Ctrl+Shift+C / Ctrl+Insert copy, Ctrl+Shift+V / Shift+Insert paste, \
          Ctrl+Shift+N new window, Ctrl+Shift+F find, Ctrl+Shift+P settings, \
-         Ctrl+= / Ctrl+- / Ctrl+0 zoom.",
+         Ctrl+= / Ctrl+- / Ctrl+0 zoom. Tabs: Ctrl+Shift+T new, Ctrl+Shift+W close, \
+         Ctrl+PgUp / Ctrl+PgDn or Ctrl+Tab / Ctrl+Shift+Tab switch, \
+         Ctrl+Shift+PgUp / Ctrl+Shift+PgDn move, Alt+1…9 go to.",
     );
     p
 }
@@ -408,8 +414,7 @@ fn behaviour_page(f: &Form, _c: &Ctx) -> gtk::Box {
     f.check(&g, "Warn before closing a window with a running program", |s| s.warn_on_close, |s, v| s.warn_on_close = v);
     f.check(&g, "Full screen on Alt-Enter", |s| s.fullscreen_on_alt_enter, |s, v| s.fullscreen_on_alt_enter = v);
     f.check(&g, "Show settings and menu buttons in the title bar", |s| s.title_buttons, |s, v| s.title_buttons = v);
-    note(&g, "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.");
-    p
+    note(&g, "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.");    p
 }
 
 fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {

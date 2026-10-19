@@ -33,8 +33,12 @@ pub fn message(parent: &impl IsA<gtk::Window>, message: &str, detail: &str) {
     d.show(Some(parent));
 }
 
-/// Remove control characters (escape sequences included) and cap length.
-/// Used for anything remote-controlled that ends up in window chrome.
+/// Remove control characters (escape sequences included) and invisible or
+/// direction-changing ones, and cap length. Used for anything
+/// remote-controlled that ends up in window chrome.
 pub fn strip_controls(s: &str, max: usize) -> String {
-    s.chars().filter(|c| !c.is_control()).take(max).collect()
+    s.chars()
+        .filter(|&c| !c.is_control() && !crate::paste::is_invisible(c))
+        .take(max)
+        .collect()
 }

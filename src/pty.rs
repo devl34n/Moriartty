@@ -56,6 +56,9 @@ pub fn spawn(
     cwd: Option<&Path>,
     cols: u16,
     rows: u16,
+    // VTE_VERSION as VTE-based terminals set it, so shell integration and
+    // programs that check for VTE work as usual.
+    vte_version: u32,
 ) -> Result<(Pty, String), String> {
     let is_shell = !matches!(command, Some([_, ..]));
     let (mut cmd, desc) = match command {
@@ -82,8 +85,19 @@ pub fn spawn(
 
     cmd.env("TERM", &s.term_type)
         .env("COLORTERM", "truecolor")
+        .env("VTE_VERSION", vte_version.to_string())
         .env_remove("COLUMNS")
         .env_remove("LINES");
+    // Meant for Moriartty itself, from the desktop that launched it; the
+    // shell (and anything it starts) must not reuse or forward them.
+    for var in [
+        "DESKTOP_STARTUP_ID",
+        "XDG_ACTIVATION_TOKEN",
+        "GIO_LAUNCHED_DESKTOP_FILE",
+        "GIO_LAUNCHED_DESKTOP_FILE_PID",
+    ] {
+        cmd.env_remove(var);
+    }
     match cwd {
         Some(d) if d.is_dir() => {
             cmd.current_dir(d);
@@ -157,6 +171,29 @@ impl Pty {
     pub fn cwd(&self) -> Option<PathBuf> {
         let pid = self.pid()?;
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    /// "program: directory" for a tab whose program sets no title, like
+    /// kitty: the program in the foreground (the shell itself when idle)
+    /// and the shell's current directory, with $HOME shown as ~.
+    pub fn describe(&self) -> Option<String> {
+        let name = sys::foreground_pgrp(self.master.as_raw_fd())
+            .ok()
+            .and_then(|pg| std::fs::read_to_string(format!("/proc/{pg}/comm")).ok())
+            .map(|s| s.trim_end().to_string())
+            .filter(|s| !s.is_empty());
+        let dir = self.cwd().map(|d| match storage::home_dir() {
+            Ok(home) => match d.strip_prefix(&home) {
+                Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+                Ok(rest) => format!("~/{}", rest.display()),
+                Err(_) => d.display().to_string(),
+            },
+            Err(_) => d.display().to_string(),
+        });
+        match (name, dir) {
+            (Some(n), Some(d)) => Some(format!("{n}: {d}")),
+            (n, d) => n.or(d),
+        }
     }
 
     pub fn exit_state(&mut self) -> ExitState {

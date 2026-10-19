@@ -30,6 +30,16 @@ pub fn path(p: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A log file name: a valid path that is absolute (or starts with `~/`), so
+/// the log never lands in whatever directory Moriartty happened to start in.
+pub fn log_path(p: &str) -> Result<(), String> {
+    path(p)?;
+    if !expand_tilde(p).is_absolute() {
+        return Err(format!("{p:?} must be an absolute path (e.g. ~/term.log)"));
+    }
+    Ok(())
+}
+
 /// The "program to run" setting: an absolute path to an executable file.
 /// It is exec'd directly (no shell), with no arguments.
 pub fn program(p: &str) -> Result<(), String> {
@@ -88,6 +98,14 @@ mod tests {
         assert!(program("sh").is_err());
         assert!(program("/etc/passwd").is_err());
         assert!(program("/bin/sh\n").is_err());
+    }
+
+    #[test]
+    fn log_paths() {
+        assert!(log_path("/var/tmp/x.log").is_ok());
+        assert!(log_path("~/moriartty-&Y&M&D-&T.log").is_ok());
+        assert!(log_path("x.log").is_err());
+        assert!(log_path("").is_err());
     }
 
     #[test]

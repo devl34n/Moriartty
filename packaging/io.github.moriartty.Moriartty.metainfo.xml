@@ -20,7 +20,7 @@
     <ul>
       <li>Copy on select and right-click paste, on by default</li>
       <li>Safe paste: escape sequences and hidden control characters are stripped, multi-line pastes ask first</li>
-      <li>Find in scrollback, font zoom and Ctrl+click web links</li>
+      <li>Tabs, find in scrollback, font zoom and Ctrl+click web links</li>
       <li>Colour schemes: PuTTY classic, Tango, Solarized and Dracula</li>
       <li>Saved settings profiles and session logging</li>
     </ul>
@@ -50,6 +50,42 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.4.4" date="2026-10-19">
+      <description>
+        <p>The close button on a tab works again.</p>
+      </description>
+    </release>
+    <release version="0.4.3" date="2026-10-19">
+      <description>
+        <ul>
+          <li>Much slimmer title bar</li>
+          <li>Double-clicking the title bar no longer also opens a tab</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.2" date="2026-10-19">
+      <description>
+        <ul>
+          <li>One slim title bar with the tabs in it</li>
+          <li>Click next to the tabs for a new tab; middle-click closes one</li>
+          <li>Tabs are named after what runs in them</li>
+          <li>Tab shortcuts work wherever the keyboard focus is</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-10-19">
+      <description>
+        <ul>
+          <li>Tabs, with keyboard shortcuts for opening, closing, switching and moving them</li>
+          <li>A broken saved shell or log file setting no longer stops Moriartty from starting</li>
+          <li>Safer paste confirmation: Cancel is the default and hidden characters are shown</li>
+          <li>Links that hide their real host behind a user name are refused</li>
+          <li>Link tooltips reveal the real host of international domain names</li>
+          <li>The Event Log updates live</li>
+          <li>Hardened log file and pseudo-terminal handling</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-10-18">
       <description>
         <ul>
