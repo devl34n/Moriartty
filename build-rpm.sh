@@ -63,4 +63,11 @@ echo
 echo "Built:"
 ls -1 "$OUT"/*.rpm
 echo
-echo "Install on Fedora with:  sudo dnf install $OUT/$NAME-$VERSION-*.$(uname -m).rpm"
+RPMS="$OUT/$NAME-$VERSION-*.$(uname -m).rpm"
+if command -v rpm >/dev/null && rpm -q "$NAME-$VERSION" >/dev/null 2>&1; then
+    # This version is already installed, and "dnf install" skips a package
+    # it already has, even when the file was rebuilt with changes.
+    echo "Install on Fedora with:  sudo dnf reinstall $RPMS"
+else
+    echo "Install on Fedora with:  sudo dnf install $RPMS"
+fi

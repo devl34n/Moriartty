@@ -1,6 +1,7 @@
 //! The PuTTY/pterm-style settings window: category tree on the left, option
 //! pages on the right, saved sessions on the Session page.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -11,13 +12,23 @@ use crate::{storage, ui};
 
 pub enum Mode {
     New,
-    Reconfigure(Rc<dyn Fn(Settings)>),
+    /// Changing an open terminal window. `preview` shows the look of the
+    /// settings being edited live; `apply` makes them stick. Closing the
+    /// dialog without applying previews the original settings again.
+    Reconfigure {
+        apply: Rc<dyn Fn(Settings)>,
+        preview: Rc<dyn Fn(&Settings)>,
+    },
 }
 
 struct Ctx {
     window: gtk::ApplicationWindow,
     open: Rc<dyn Fn()>,
     reconfig: bool,
+    /// Shows settings in the terminal without changing the form (Try).
+    preview: Option<Rc<dyn Fn(&Settings)>>,
+    /// The scheme last shown with Try; Apply keeps it.
+    tried: Rc<Cell<Option<usize>>>,
 }
 
 type Builder = fn(&Form, &Ctx) -> gtk::Box;
@@ -36,8 +47,8 @@ const PAGES: &[(i32, &str, &str, Builder)] = &[
     (1, "colours", "Colours", colours_page),
 ];
 
-pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
-    let reconfig = matches!(mode, Mode::Reconfigure(_));
+pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::ApplicationWindow {
+    let reconfig = matches!(mode, Mode::Reconfigure { .. });
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .icon_name(crate::APP_ID)
@@ -45,7 +56,57 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
         .default_width(780)
         .default_height(620)
         .build();
+    let applied = Rc::new(std::cell::Cell::new(false));
+    // Put the terminal's previewed look back, unless the settings were
+    // applied. Run after this window has gone, so closing never waits on
+    // restyling the terminal.
+    let revert: Rc<dyn Fn()> = match &mode {
+        Mode::Reconfigure { preview, .. } => {
+            let original = initial.clone();
+            let (preview, applied) = (preview.clone(), applied.clone());
+            Rc::new(move || {
+                if !applied.replace(true) {
+                    let (preview, original) = (preview.clone(), original.clone());
+                    gtk::glib::idle_add_local_once(move || preview(&original));
+                }
+            })
+        }
+        Mode::New => Rc::new(|| {}),
+    };
+    {
+        let revert = revert.clone();
+        window.connect_close_request(move |_| {
+            ui::debug("settings: close requested");
+            revert();
+            gtk::glib::Propagation::Proceed
+        });
+    }
     let form = Form::new(initial);
+    {
+        let form = form.clone();
+        window.connect_destroy(move |_| {
+            ui::debug("settings: destroyed");
+            form.clear();
+        });
+    }
+    // Live preview in the terminal, when there is one (Reconfigure).
+    let preview: Option<Rc<dyn Fn(&Settings)>> = match &mode {
+        Mode::Reconfigure { preview, .. } => Some(preview.clone()),
+        Mode::New => None,
+    };
+    // A scheme shown with Try is not part of the form until Apply; any
+    // change made in the form itself drops it.
+    let tried: Rc<Cell<Option<usize>>> = Rc::default();
+    {
+        let (preview, s, tried) = (preview.clone(), form.s.clone(), tried.clone());
+        form.on_change(move || {
+            tried.set(None);
+            if let Some(preview) = &preview {
+                ui::debug("settings: preview");
+                preview(&s.borrow());
+            }
+        });
+    }
 
     // Without this, changes only affect the current window and are gone in
     // the next one — which looks like a bug to anyone who isn't a PuTTY user.
@@ -60,10 +121,17 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
         let window = window.clone();
         let app = app.clone();
         let save_default = save_default.clone();
+        let applied = applied.clone();
+        let tried = tried.clone();
         Rc::new(move || {
+            ui::debug("settings: apply");
             let mut s = form.get();
+            if let Some((_, colours)) = tried.get().and_then(|i| SCHEMES.get(i)) {
+                s.colours = colours.clone();
+            }
             s.sanitize();
             if let Err(e) = s.validate() {
+                ui::debug(format!("settings: invalid: {e}"));
                 ui::message(&window, "Invalid settings", &e);
                 return;
             }
@@ -72,14 +140,25 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
             } else {
                 Ok(())
             };
+            applied.set(true);
             match &mode {
                 Mode::New => ui::terminal::open(&app, s, None, None),
-                Mode::Reconfigure(apply) => apply(s),
+                Mode::Reconfigure { apply, .. } => apply(s),
             }
-            match saved {
-                Ok(()) => window.close(),
-                // Applied, but keep the dialog open so the error is seen.
-                Err(e) => ui::message(&window, "Settings applied, but could not be saved", &e),
+            // Once applied, the dialog always goes (destroyed outright, not
+            // through close-request). A save error is shown on the terminal
+            // window instead of holding this one open.
+            ui::debug(format!("settings: applied, saved: {}", saved.is_ok()));
+            window.destroy();
+            if let Err(e) = saved {
+                eprintln!("moriartty: could not save settings: {e}");
+                let parent = app
+                    .windows()
+                    .into_iter()
+                    .find(|w| w != window.upcast_ref::<gtk::Window>());
+                if let Some(parent) = parent {
+                    ui::message(&parent, "Settings applied, but could not be saved", &e);
+                }
             }
         })
     };
@@ -88,6 +167,8 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
         window: window.clone(),
         open: open.clone(),
         reconfig,
+        preview,
+        tried,
     };
 
     let stack = gtk::Stack::new();
@@ -146,8 +227,12 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
     let open_btn = gtk::Button::with_label(if reconfig { "Apply" } else { "Open" });
     open_btn.add_css_class("suggested-action");
     {
-        let window = window.clone();
-        cancel.connect_clicked(move |_| window.close());
+        let (window, revert) = (window.clone(), revert.clone());
+        cancel.connect_clicked(move |_| {
+            ui::debug("settings: cancel");
+            revert();
+            window.destroy();
+        });
     }
     {
         let open = open.clone();
@@ -168,6 +253,7 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) {
 
     form.refresh();
     window.present();
+    window
 }
 
 // ------------------------------------------------------------------ Session
@@ -404,6 +490,9 @@ fn appearance_page(f: &Form, _c: &Ctx) -> gtk::Box {
     f.check(&g, "Hide mouse pointer when typing in window", |s| s.hide_mouse, |s, v| s.hide_mouse = v);
     let g = group(&p, "Adjust the window border");
     f.number(&g, "Gap between text and window edge", 0, 64, |s| u32::from(s.window_border), |s, v| s.window_border = v as u16);
+    let g = group(&p, "Background");
+    f.number(&g, "Background opacity (%)", 30, 100, |s| s.background_opacity, |s, v| s.background_opacity = v);
+    note(&g, "Below 100 the desktop shows through the terminal. This needs a compositing desktop.");
     p
 }
 
@@ -414,7 +503,8 @@ fn behaviour_page(f: &Form, _c: &Ctx) -> gtk::Box {
     f.check(&g, "Warn before closing a window with a running program", |s| s.warn_on_close, |s, v| s.warn_on_close = v);
     f.check(&g, "Full screen on Alt-Enter", |s| s.fullscreen_on_alt_enter, |s, v| s.fullscreen_on_alt_enter = v);
     f.check(&g, "Show settings and menu buttons in the title bar", |s| s.title_buttons, |s, v| s.title_buttons = v);
-    note(&g, "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.");    p
+    note(&g, "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.");
+    p
 }
 
 fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
@@ -423,9 +513,16 @@ fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
     f.choice(&g, "Action of mouse buttons", |s| s.mouse_action, |s, v| s.mouse_action = v);
     note(&g, "Ctrl+Right-click always opens the menu. Hold Shift to send clicks to the application.");
     let g = group(&p, "Copy and paste");
-    f.check(&g, "Copy selected text to the clipboard automatically", |s| s.copy_on_select, |s, v| s.copy_on_select = v);
+    f.check(&g, "Also copy selected text to the clipboard", |s| s.copy_to_clipboard, |s, v| s.copy_to_clipboard = v);
+    note(
+        &g,
+        "Selected text always goes to the PRIMARY selection, which Middle-click \
+         (and Right-click in Compromise mode) pastes. Ctrl+Shift+C or Ctrl+Insert \
+         copies it to the clipboard. Clipboard managers keep whatever reaches the \
+         clipboard, so copying every selection there is off by default.",
+    );
     f.entry(&g, "Extra characters treated as part of a word", |s| s.word_chars.clone(), |s, v| s.word_chars = v);
-    f.check(&g, "Ask before pasting text that contains line breaks", |s| s.confirm_multiline_paste, |s, v| s.confirm_multiline_paste = v);
+    f.check(&g, "Ask before pasting several lines or hidden characters", |s| s.confirm_multiline_paste, |s, v| s.confirm_multiline_paste = v);
     f.check(&g, "Permit control characters in pasted text (unsafe)", |s| s.paste_controls, |s, v| s.paste_controls = v);
     note(
         &g,
@@ -435,39 +532,69 @@ fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
     p
 }
 
-fn colours_page(f: &Form, _c: &Ctx) -> gtk::Box {
+fn colours_page(f: &Form, c: &Ctx) -> gtk::Box {
     let p = page("Options controlling use of colours");
 
     let g = group(&p, "Colour scheme");
+    let follow = f.check(
+        &g,
+        "Follow the desktop's light or dark style (Moriartty Dark / Light)",
+        |s| s.auto_colours,
+        |s, v| s.auto_colours = v,
+    );
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let names: Vec<&str> = SCHEMES.iter().map(|(n, _)| *n).collect();
     let schemes = gtk::DropDown::from_strings(&names);
     schemes.set_hexpand(true);
-    let apply = gtk::Button::with_label("Use this scheme");
+    if let Some(i) = SCHEMES.iter().position(|(_, cols)| *cols == f.s.borrow().colours) {
+        schemes.set_selected(i as u32);
+    }
+    let try_btn = gtk::Button::with_label("Try");
+    try_btn.set_tooltip_text(Some("Show this scheme in the terminal without changing anything. Apply keeps it."));
     {
-        let (f, schemes) = (f.clone(), schemes.clone());
-        apply.connect_clicked(move |_| {
-            if let Some((_, colours)) = SCHEMES.get(schemes.selected() as usize) {
-                f.s.borrow_mut().colours = colours.clone();
-                f.refresh();
+        let (f, schemes, preview, tried) = (f.clone(), schemes.clone(), c.preview.clone(), c.tried.clone());
+        try_btn.connect_clicked(move |_| {
+            let i = schemes.selected() as usize;
+            let Some((name, colours)) = SCHEMES.get(i) else { return };
+            ui::debug(format!("settings: try {name}"));
+            tried.set(Some(i));
+            if let Some(preview) = &preview {
+                let mut s = f.get();
+                s.colours = colours.clone();
+                preview(&s);
             }
         });
     }
     row.append(&schemes);
-    row.append(&apply);
+    row.append(&try_btn);
     g.append(&row);
-    note(&g, "Replaces all the colours below; you can still fine-tune them afterwards.");
+    note(
+        &g,
+        "Try shows a scheme in the terminal without changing anything here. Apply keeps \
+         the scheme you tried last and closes this window; Cancel goes back to what you \
+         had. Changing a colour below works on your own colours instead.",
+    );
 
     let g = group(&p, "General options for colour usage");
     f.check(&g, "Show bold text in a brighter colour", |s| s.bold_as_colour, |s, v| s.bold_as_colour = v);
-    let g = group(&p, "Adjust the precise colours Moriartty displays");
-    f.colour(&g, "Default Foreground", |s| s.colours.foreground, |s, v| s.colours.foreground = v);
-    f.colour(&g, "Default Bold Foreground", |s| s.colours.bold_foreground, |s, v| s.colours.bold_foreground = v);
-    f.colour(&g, "Default Background", |s| s.colours.background, |s, v| s.colours.background = v);
-    f.colour(&g, "Cursor Text", |s| s.colours.cursor_text, |s, v| s.colours.cursor_text = v);
-    f.colour(&g, "Cursor Colour", |s| s.colours.cursor, |s, v| s.colours.cursor = v);
+    let pickers = group(&p, "Adjust the precise colours Moriartty displays");
+    f.colour(&pickers, "Default Foreground", |s| s.colours.foreground, |s, v| s.colours.foreground = v);
+    f.colour(&pickers, "Default Bold Foreground", |s| s.colours.bold_foreground, |s, v| s.colours.bold_foreground = v);
+    f.colour(&pickers, "Default Background", |s| s.colours.background, |s, v| s.colours.background = v);
+    f.colour(&pickers, "Cursor Text", |s| s.colours.cursor_text, |s, v| s.colours.cursor_text = v);
+    f.colour(&pickers, "Cursor Colour", |s| s.colours.cursor, |s, v| s.colours.cursor = v);
     for (i, name) in ANSI_NAMES.iter().enumerate() {
-        f.colour(&g, name, move |s| s.colours.ansi[i], move |s, v| s.colours.ansi[i] = v);
+        f.colour(&pickers, name, move |s| s.colours.ansi[i], move |s, v| s.colours.ansi[i] = v);
     }
+
+    // Picking colours by hand only applies when not following the desktop.
+    let manual: [gtk::Widget; 2] = [row.upcast(), pickers.upcast()];
+    let set_manual = move |follow: bool| {
+        for w in &manual {
+            w.set_sensitive(!follow);
+        }
+    };
+    set_manual(f.s.borrow().auto_colours);
+    follow.connect_toggled(move |b| set_manual(b.is_active()));
     p
 }

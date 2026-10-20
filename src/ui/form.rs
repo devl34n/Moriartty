@@ -18,6 +18,26 @@ pub struct Form {
     pub s: Shared,
     refreshers: Rc<RefCell<Vec<Refresher>>>,
     refreshing: Rc<Cell<bool>>,
+    changed: Changed,
+}
+
+/// Callbacks run after the user changes a value (live preview). While
+/// `refresh` pushes values into the widgets they are held back, and run
+/// once at the end.
+#[derive(Clone)]
+struct Changed {
+    callbacks: Rc<RefCell<Vec<Box<dyn Fn()>>>>,
+    refreshing: Rc<Cell<bool>>,
+}
+
+impl Changed {
+    fn fire(&self) {
+        if !self.refreshing.get() {
+            for f in self.callbacks.borrow().iter() {
+                f();
+            }
+        }
+    }
 }
 
 pub fn page(title: &str) -> gtk::Box {
@@ -86,11 +106,32 @@ fn to8(v: f32) -> u8 {
 
 impl Form {
     pub fn new(s: Settings) -> Self {
+        let refreshing: Rc<Cell<bool>> = Rc::default();
         Form {
             s: Rc::new(RefCell::new(s)),
             refreshers: Rc::default(),
-            refreshing: Rc::default(),
+            refreshing: refreshing.clone(),
+            changed: Changed {
+                callbacks: Rc::default(),
+                refreshing,
+            },
         }
+    }
+
+    /// Drop every widget binding, so a closed dialog can be freed: the
+    /// bindings and the widgets' signal handlers hold on to each other.
+    pub fn clear(&self) {
+        if let Ok(mut r) = self.refreshers.try_borrow_mut() {
+            r.clear();
+        }
+        if let Ok(mut c) = self.changed.callbacks.try_borrow_mut() {
+            c.clear();
+        }
+    }
+
+    /// Call `f` after every change the user makes.
+    pub fn on_change(&self, f: impl Fn() + 'static) {
+        self.changed.callbacks.borrow_mut().push(Box::new(f));
     }
 
     pub fn get(&self) -> Settings {
@@ -109,6 +150,7 @@ impl Form {
             r(&snapshot);
         }
         self.refreshing.set(false);
+        self.changed.fire();
     }
 
     fn on_refresh(&self, f: impl Fn(&Settings) + 'static) {
@@ -124,8 +166,11 @@ impl Form {
     ) -> gtk::Entry {
         let e = gtk::Entry::new();
         labelled(parent, label, &e, true);
-        let s = self.s.clone();
-        e.connect_changed(move |e| set(&mut *s.borrow_mut(), e.text().to_string()));
+        let (s, changed) = (self.s.clone(), self.changed.clone());
+        e.connect_changed(move |e| {
+            set(&mut *s.borrow_mut(), e.text().to_string());
+            changed.fire();
+        });
         let e2 = e.clone();
         self.on_refresh(move |st| {
             let v = get(st);
@@ -145,8 +190,11 @@ impl Form {
     ) -> gtk::CheckButton {
         let c = gtk::CheckButton::with_label(label);
         parent.append(&c);
-        let s = self.s.clone();
-        c.connect_toggled(move |c| set(&mut *s.borrow_mut(), c.is_active()));
+        let (s, changed) = (self.s.clone(), self.changed.clone());
+        c.connect_toggled(move |c| {
+            set(&mut *s.borrow_mut(), c.is_active());
+            changed.fire();
+        });
         let c2 = c.clone();
         self.on_refresh(move |st| {
             let v = get(st);
@@ -169,10 +217,11 @@ impl Form {
         let sp = gtk::SpinButton::with_range(f64::from(min), f64::from(max), 1.0);
         sp.set_digits(0);
         labelled(parent, label, &sp, false);
-        let s = self.s.clone();
+        let (s, changed) = (self.s.clone(), self.changed.clone());
         sp.connect_value_changed(move |sp| {
             let v = sp.value().round().clamp(f64::from(min), f64::from(max)) as u32;
             set(&mut *s.borrow_mut(), v);
+            changed.fire();
         });
         let sp2 = sp.clone();
         self.on_refresh(move |st| {
@@ -194,7 +243,7 @@ impl Form {
         let labels: Vec<&str> = T::all().iter().map(|v| v.label()).collect();
         let dd = gtk::DropDown::from_strings(&labels);
         labelled(parent, label, &dd, true);
-        let s = self.s.clone();
+        let (s, changed) = (self.s.clone(), self.changed.clone());
         let refreshing = self.refreshing.clone();
         dd.connect_selected_notify(move |dd| {
             if refreshing.get() {
@@ -202,6 +251,7 @@ impl Form {
             }
             if let Some(v) = T::all().get(dd.selected() as usize) {
                 set(&mut *s.borrow_mut(), *v);
+                changed.fire();
             }
         });
         let dd2 = dd.clone();
@@ -226,10 +276,11 @@ impl Form {
         dialog.set_with_alpha(false);
         let b = gtk::ColorDialogButton::new(Some(dialog));
         labelled(parent, label, &b, false);
-        let s = self.s.clone();
+        let (s, changed) = (self.s.clone(), self.changed.clone());
         b.connect_rgba_notify(move |b| {
             let c = b.rgba();
             set(&mut *s.borrow_mut(), [to8(c.red()), to8(c.green()), to8(c.blue())]);
+            changed.fire();
         });
         let b2 = b.clone();
         self.on_refresh(move |st| b2.set_rgba(&rgba(get(st))));
@@ -244,10 +295,11 @@ impl Form {
     ) {
         let b = gtk::FontDialogButton::new(Some(gtk::FontDialog::new()));
         labelled(parent, label, &b, true);
-        let s = self.s.clone();
+        let (s, changed) = (self.s.clone(), self.changed.clone());
         b.connect_font_desc_notify(move |b| {
             if let Some(d) = b.font_desc() {
                 set(&mut *s.borrow_mut(), d.to_str().to_string());
+                changed.fire();
             }
         });
         let b2 = b.clone();

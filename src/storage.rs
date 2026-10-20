@@ -2,16 +2,35 @@
 //! `$XDG_CONFIG_HOME/moriartty/sessions/`, directory mode 0700, files 0600,
 //! written atomically, symlinks refused.
 
+use std::collections::hash_map::RandomState;
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
+use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::config::Settings;
 use crate::validate;
 
 pub const DEFAULT_SESSION: &str = "Default Settings";
 const MAX_FILE: u64 = 1 << 20;
+
+/// Problems found while loading settings before any window exists. The
+/// first terminal shows them (`take_notices`), so they aren't only on a
+/// stderr nobody sees.
+static NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn notice(msg: String) {
+    eprintln!("moriartty: {msg}");
+    if let Ok(mut n) = NOTICES.lock() {
+        n.push(msg);
+    }
+}
+
+pub fn take_notices() -> Vec<String> {
+    NOTICES.lock().map(|mut n| std::mem::take(&mut *n)).unwrap_or_default()
+}
 
 fn uid() -> u32 {
     nix::unistd::getuid().as_raw()
@@ -103,14 +122,18 @@ pub fn read_private_file(path: &Path) -> Result<String, String> {
     Ok(s)
 }
 
-/// Write via a 0600 temporary file in the same directory, fsync, rename.
+/// Write via a 0600 temporary file in the same directory, fsync, rename,
+/// fsync the directory.
 fn write_private_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or("invalid path")?;
     let fname = path
         .file_name()
         .and_then(|f| f.to_str())
         .ok_or("invalid file name")?;
-    let tmp = dir.join(format!(".{fname}.{}.tmp", std::process::id()));
+    // An unpredictable name (RandomState is seeded from the OS), so nothing
+    // can be waiting at it.
+    let nonce = RandomState::new().build_hasher().finish();
+    let tmp = dir.join(format!(".{fname}.{nonce:016x}.tmp"));
     let result = (|| -> io::Result<()> {
         let mut f: File = OpenOptions::new()
             .write(true)
@@ -126,6 +149,15 @@ fn write_private_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Err(e) = result {
         let _ = fs::remove_file(&tmp);
         return Err(format!("{}: {e}", path.display()));
+    }
+    // Make the rename itself survive a crash. Best effort: the new file is
+    // already in place.
+    if let Ok(d) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(dir)
+    {
+        let _ = d.sync_all();
     }
     Ok(())
 }
@@ -149,24 +181,61 @@ pub fn list_sessions() -> Vec<String> {
     names
 }
 
-pub fn load_session(name: &str) -> Result<Settings, String> {
-    let path = session_path(name)?;
+/// Why a saved session could not be loaded.
+enum LoadError {
+    /// The file could not be read (permissions, symlink, owner, ...).
+    Read(String),
+    /// It was read, but is not valid settings.
+    Parse(PathBuf, String),
+}
+
+fn try_load(name: &str) -> Result<Settings, LoadError> {
+    let path = session_path(name).map_err(LoadError::Read)?;
     if name == DEFAULT_SESSION && fs::symlink_metadata(&path).is_err() {
         return Ok(Settings::default());
     }
-    let text = read_private_file(&path)?;
-    let mut s: Settings =
-        toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = read_private_file(&path).map_err(LoadError::Read)?;
+    let mut s: Settings = toml::from_str(&text)
+        .map_err(|e| LoadError::Parse(path.clone(), format!("{}: {e}", path.display())))?;
+    s.migrate();
     s.sanitize();
     Ok(s)
 }
 
-/// "Default Settings", or built-in defaults if that cannot be read.
-pub fn load_default() -> Settings {
-    load_session(DEFAULT_SESSION).unwrap_or_else(|e| {
-        eprintln!("moriartty: ignoring saved default settings: {e}");
-        Settings::default()
+pub fn load_session(name: &str) -> Result<Settings, String> {
+    try_load(name).map_err(|e| match e {
+        LoadError::Read(m) | LoadError::Parse(_, m) => m,
     })
+}
+
+/// "Default Settings", or built-in defaults if that cannot be read.
+///
+/// The settings window saves to "Default Settings" by default, so a file
+/// that doesn't parse is moved aside to `….toml.bad` first: it is kept for
+/// the user to fix, never silently overwritten.
+pub fn load_default() -> Settings {
+    match try_load(DEFAULT_SESSION) {
+        Ok(s) => s,
+        Err(LoadError::Read(e)) => {
+            notice(format!("Ignoring saved default settings: {e}"));
+            Settings::default()
+        }
+        Err(LoadError::Parse(path, e)) => {
+            let bad = path.with_extension("toml.bad");
+            notice(match fs::rename(&path, &bad) {
+                Ok(()) => format!(
+                    "Saved default settings could not be read ({e}). They were moved to {} \
+                     and built-in defaults are used.",
+                    bad.display()
+                ),
+                Err(re) => format!(
+                    "Saved default settings could not be read ({e}), nor moved aside ({re}). \
+                     Built-in defaults are used."
+                ),
+            });
+            Settings::default()
+        }
+    }
 }
 
 pub fn save_session(name: &str, s: &Settings) -> Result<(), String> {

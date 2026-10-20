@@ -36,12 +36,17 @@ install -Dm0644 packaging/io.github.moriartty.Moriartty.metainfo.xml \
 
 MAGICK=convert
 command -v magick >/dev/null && MAGICK=magick
+# The logo is 3:2; pad it to a square instead of letting the icons come
+# out non-square.
 for size in 16 24 32 48 64 128 256 512; do
     dir="$ROOT/usr/share/icons/hicolor/${size}x${size}/apps"
     install -d "$dir"
     "$MAGICK" packaging/moriartty-logo.png -resize "${size}x${size}" \
+        -background none -gravity center -extent "${size}x${size}" \
         "$dir/io.github.moriartty.Moriartty.png"
 done
+install -Dm0644 packaging/io.github.moriartty.Moriartty-symbolic.svg \
+    "$ROOT/usr/share/icons/hicolor/symbolic/apps/io.github.moriartty.Moriartty-symbolic.svg"
 
 DOC="$ROOT/usr/share/doc/$NAME"
 install -d "$DOC"
@@ -78,9 +83,9 @@ Depends: $DEPENDS
 Provides: x-terminal-emulator
 Section: x11
 Priority: optional
-Description: PuTTY-style terminal emulator
- Moriartty is a terminal emulator modelled on PuTTY's pterm: the same
- configuration tree (Session, Logging, Terminal, Keyboard, Bell, Features,
+Description: private-by-default terminal inspired by PuTTY
+ Moriartty is a fast, private-by-default terminal emulator inspired by
+ PuTTY's pterm. It keeps pterm's configuration tree (Session, Logging, Terminal, Keyboard, Bell, Features,
  Window, Appearance, Behaviour, Selection, Colours), saved setting profiles,
  copy-on-select and right-click paste, with safe paste filtering.
 EOF

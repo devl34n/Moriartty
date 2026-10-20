@@ -1,7 +1,7 @@
 # Moriartty
 
-A PuTTY-style terminal emulator for Linux (think PuTTY's `pterm`), written in
-Rust with GTK 4 + VTE.
+A fast, private-by-default terminal emulator for Linux, inspired by PuTTY's
+`pterm`. Written in Rust with GTK 4 + VTE.
 
 ![Moriartty terminal window](docs/screenshots/terminal.png)
 
@@ -12,8 +12,10 @@ Rust with GTK 4 + VTE.
   tabs for a new one (or Ctrl+Shift+T); middle-click a tab to close it. Tabs are named like kitty's: the title the program sets, otherwise
   "program: directory" (`bash: ~/src`, `vim: ~/src`). A bell in a
   background tab makes its name bold.
-* **Copy on select** and **right-click paste** are on by default (PuTTY's
-  "Compromise" mouse mode).
+* **Select to copy, right-click to paste** (PuTTY's "Compromise" mouse
+  mode). Selections go to the PRIMARY selection only, so clipboard managers
+  don't see them. Ctrl+Shift+C copies to the clipboard, and Settings →
+  Selection can send every selection there too.
 * The title bar has the tabs, a **⚙ Settings** button and a **☰ menu**; the
   two buttons can be hidden for a minimal look. The same menu opens with **Ctrl+Right-click**:
   Copy, Paste, Copy All, Find, Zoom, New Tab, New Window, Close Tab, Restart Shell, Settings,
@@ -25,8 +27,13 @@ Rust with GTK 4 + VTE.
   apps that need a terminal (see below).
 * **Ctrl+click opens web links.** Only `http`/`https` links are opened, and
   the full address is shown in a tooltip first.
-* **Colour schemes:** PuTTY classic, Tango dark/light, Solarized dark/light,
-  Dracula, plus every colour adjustable individually.
+* **Follows your desktop's light or dark style** with the Moriartty Dark
+  and Light colours, and the title bar takes the terminal's colours.
+  Other schemes: PuTTY classic, Tango dark/light, Solarized dark/light,
+  Dracula, plus every colour adjustable individually, with a live preview.
+  Optional background transparency.
+* **Drag tabs** to reorder them; the mouse wheel scrolls through them when
+  they don't all fit.
 * The settings follow PuTTY's tree: Session (shell, saved sessions, close on
   exit) · Logging · Terminal (Keyboard, Bell, Features) · Window (Appearance,
   Behaviour, Selection, Colours).
@@ -137,9 +144,10 @@ sudo update-alternatives --config x-terminal-emulator
 
 * **Paste:** escape and other control characters are stripped. The
   bracketed-paste terminator is always removed, so pasted text can't escape
-  bracketed-paste mode. Multi-line pastes ask for confirmation (Cancel is
-  the default button); the preview spells out invisible and
-  direction-changing characters and says how much is not shown. A paste
+  bracketed-paste mode. Pastes with several lines, or with invisible or
+  direction-changing characters, ask for confirmation (Cancel is the
+  default button); the preview spells those characters out and says how
+  much is not shown. A paste
   is dropped if the shell was restarted in the meantime. Middle-click
   (PRIMARY selection) pastes go through the same filter.
 * **What programs can do to the terminal:** no answerback, no title
@@ -148,12 +156,21 @@ sudo update-alternatives --config x-terminal-emulator
   are off by default.
 * **Links:** only `http://` and `https://` URLs can be opened, never `file:`
   or custom schemes, and never links with a user name before the host
-  (`https://bank.example@evil.example/`). Opening one always takes a
-  Ctrl+click, and the tooltip shows the full address first. For
-  international host names, which can imitate other sites letter for
-  letter, the tooltip also shows the real `xn--` host.
+  (`https://bank.example@evil.example/`), invisible or direction-changing
+  characters, or a backslash in the host. Opening one always takes a
+  Ctrl+click, and the tooltip shows the full address first. OSC 8 links,
+  whose text the program chooses, and international host names, which can
+  imitate other sites letter for letter, ask before opening and show the
+  real address (the `xn--` host for international names).
+* **Clipboard and logs:** selections stay out of the clipboard unless you
+  turn that on, and Copy All asks before copying a large scrollback. A red
+  dot on a tab shows that its output is being logged; hover it for the
+  file.
 * **Files:** the config directory is 0700 and session files are 0600, written
-  atomically. Symlinks and files owned by other users are refused. Log files
+  atomically through an unpredictable temporary name. Symlinks and files
+  owned by other users are refused. A Default Settings file that can't be
+  read is moved aside to `Default Settings.toml.bad` and the window says
+  so, instead of it being overwritten. Log files
   must have an absolute path, are 0600, are opened with `O_NOFOLLOW` and
   without blocking on FIFOs, and are only emptied after those checks pass.
 * **Bad settings never lock you out:** if a saved shell, terminal type or
@@ -162,13 +179,26 @@ sudo update-alternatives --config x-terminal-emulator
 * **Running programs:** the shell and `-e` commands are started directly,
   never through an extra `sh -c`. A custom shell must be an absolute path to
   an executable. The pty is created close-on-exec from the start, and
-  launcher variables such as `XDG_ACTIVATION_TOKEN` are not passed on.
+  launcher variables such as `XDG_ACTIVATION_TOKEN` are not passed on. A
+  program that ignores the hangup when its tab closes is killed two seconds
+  later.
 * **Process:** Moriartty is non-dumpable (`PR_SET_DUMPABLE=0`), so there are
   no core dumps of your scrollback and other programs running as you can't
   ptrace it. All `unsafe` code is in `src/sys.rs`. Release builds keep
   overflow checks on and abort on panic.
 
-## PuTTY settings not available
+## Differences from PuTTY
+
+Moriartty keeps what PuTTY users rely on: the settings tree, saved sessions,
+pterm's command-line options and the mouse model. On purpose, it also:
+
+* has **tabs**, named after the program and directory they run in;
+* adds **find in scrollback**, **font zoom** and **Ctrl+click web links**;
+* has no answerback string and never answers window-title queries (see
+  [Security design](#security-design));
+* can be the desktop's **default terminal**.
+
+Not available:
 
 * **Not exposed by VTE:** function-key and Home/End sequence variants,
   initial keypad and cursor-key modes, disabling mouse reporting or the

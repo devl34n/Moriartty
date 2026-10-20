@@ -1,9 +1,9 @@
 [package]
 name = "moriartty"
-version = "0.4.4"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.80"
-description = "A PuTTY-style (pterm) terminal emulator for Linux"
+description = "A fast, private-by-default terminal for Linux, inspired by PuTTY's pterm"
 license = "MIT"
 readme = "README.md"
 

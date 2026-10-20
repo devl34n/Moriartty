@@ -1,5 +1,6 @@
 pub mod config_dialog;
 pub mod form;
+pub mod style;
 pub mod terminal;
 
 use gtk::prelude::*;
@@ -31,6 +32,18 @@ pub fn message(parent: &impl IsA<gtk::Window>, message: &str, detail: &str) {
         .detail(detail)
         .build();
     d.show(Some(parent));
+}
+
+/// Whether MORIARTTY_DEBUG is set.
+pub fn debugging() -> bool {
+    std::env::var_os("MORIARTTY_DEBUG").is_some()
+}
+
+/// Diagnostics on stderr, only when MORIARTTY_DEBUG is set.
+pub fn debug(msg: impl AsRef<str>) {
+    if debugging() {
+        eprintln!("moriartty[debug]: {}", msg.as_ref());
+    }
 }
 
 /// Remove control characters (escape sequences included) and invisible or

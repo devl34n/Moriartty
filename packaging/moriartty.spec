@@ -1,7 +1,7 @@
 Name:           moriartty
-Version:        0.4.4
+Version:        0.6.0
 Release:        1%{?dist}
-Summary:        PuTTY-style terminal emulator for Linux
+Summary:        Private-by-default terminal for Linux, inspired by PuTTY
 License:        MIT
 Source0:        %{name}-%{version}.tar.gz
 # Vendored crates, produced by build-rpm.sh (`cargo vendor`), so the build
@@ -23,8 +23,8 @@ BuildRequires:  ImageMagick
 %endif
 
 %description
-Moriartty is a terminal emulator modelled on PuTTY's pterm: the same
-configuration tree (Session, Logging, Terminal, Keyboard, Bell, Features,
+Moriartty is a fast, private-by-default terminal emulator inspired by
+PuTTY's pterm. It keeps pterm's configuration tree (Session, Logging, Terminal, Keyboard, Bell, Features,
 Window, Appearance, Behaviour, Selection, Colours), saved setting profiles,
 copy-on-select and right-click paste, with safe paste filtering.
 
@@ -50,11 +50,16 @@ install -Dpm0644 packaging/io.github.moriartty.Moriartty.desktop \
     %{buildroot}%{_datadir}/applications/io.github.moriartty.Moriartty.desktop
 install -Dpm0644 packaging/io.github.moriartty.Moriartty.metainfo.xml \
     %{buildroot}%{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
+# The logo is 3:2; pad it to a square instead of letting the icons come
+# out non-square.
 for size in 16 24 32 48 64 128 256 512; do
     install -d %{buildroot}%{_datadir}/icons/hicolor/${size}x${size}/apps
     magick packaging/moriartty-logo.png -resize ${size}x${size} \
+        -background none -gravity center -extent ${size}x${size} \
         %{buildroot}%{_datadir}/icons/hicolor/${size}x${size}/apps/io.github.moriartty.Moriartty.png
 done
+install -Dpm0644 packaging/io.github.moriartty.Moriartty-symbolic.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/symbolic/apps/io.github.moriartty.Moriartty-symbolic.svg
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.moriartty.Moriartty.desktop
@@ -68,9 +73,45 @@ cargo test --release --frozen --offline
 %{_bindir}/moriartty
 %{_datadir}/applications/io.github.moriartty.Moriartty.desktop
 %{_datadir}/icons/hicolor/*/apps/io.github.moriartty.Moriartty.png
+%{_datadir}/icons/hicolor/symbolic/apps/io.github.moriartty.Moriartty-symbolic.svg
 %{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
 
 %changelog
+* Tue Oct 20 2026 Moriartty Developers - 0.6.0-1
+- New default colours, Moriartty Dark and Light, following the desktop's
+  light or dark style; dialogs and menus follow it too
+- The title bar takes the terminal's colours (not with high contrast)
+- Tabs: underline on the current tab, close button shown on hover, drag to
+  reorder, mouse-wheel scrolling when they don't fit
+- 6px default gap between text and window edge
+- Optional background opacity
+- One settings window per terminal window, with a live preview of colours
+  that Cancel undoes
+- Square app icons and a symbolic icon
+- Screen readers see the tabs as tabs
+- Saved settings switch to following the desktop (saved colours are kept
+  for when that is turned off); a border still at the old default moves
+  to the new one
+- Desktops without the portal (Cinnamon, MATE, XFCE) are followed through
+  their GTK theme
+
+* Tue Oct 20 2026 Moriartty Developers - 0.5.0-1
+- Selected text goes to PRIMARY only; copying it to the clipboard too is an
+  option, off by default. Right-click pastes the selection
+- Ask before opening OSC 8 links and international domain names
+- Refuse links with invisible or direction-changing characters, or a
+  backslash in the host
+- Paste preview also for single lines with hidden characters
+- Copy All asks before copying a large scrollback
+- A tab shows when its output is being logged
+- A Default Settings file that can't be read is moved aside to .toml.bad
+  and reported in the window, instead of being overwritten
+- Settings files carry a format version
+- The Event Log is capped and collapses repeated messages
+- A program that ignores the hangup is killed when its tab closes
+- Settings are saved through an unpredictable temporary name and the
+  directory is synced
+
 * Mon Oct 19 2026 Moriartty Developers - 0.4.4-1
 - The × on a tab closes it again
 
@@ -95,6 +136,7 @@ cargo test --release --frozen --offline
 - The Event Log window updates live; VTE_VERSION is set for the shell
 - Log files: no blocking on FIFOs, emptied only after the safety checks
 - Pty created close-on-exec; launcher variables not passed to the shell
+
 * Sun Oct 18 2026 Moriartty Developers - 0.3.0-1
 - Usable as the desktop's default terminal (xdg-terminal-exec keys, -dir, -hold)
 - AppStream metadata, so it appears in GNOME Software / KDE Discover

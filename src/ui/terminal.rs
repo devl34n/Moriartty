@@ -12,22 +12,23 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib, pango};
+use gtk::{gdk, gio, glib, graphene, pango};
 use vte::prelude::*;
 
 use super::config_dialog::{self, Mode};
 use super::form::rgba;
-use super::{ask, strip_controls};
+use super::{ask, strip_controls, style};
 use crate::config::*;
 use crate::logging::{self, SessionLog};
 use crate::matching::{self, PCRE2_CASELESS, PCRE2_MULTILINE, PCRE2_UTF};
-use crate::paste::{paste_preview, sanitize_paste};
+use crate::paste::{is_invisible, paste_preview, sanitize_paste};
 use crate::pty::{self, ExitState, Pty, ReadStatus};
+use crate::storage;
 
 struct Session {
     pty: Pty,
@@ -43,7 +44,14 @@ pub struct TermWindow {
     stack: gtk::Stack,
     /// The tabs' headers, in tab order.
     strip: gtk::Box,
+    strip_scroll: gtk::ScrolledWindow,
     title_buttons: gtk::Box,
+    /// This window's own style (title bar colours, transparency), for
+    /// widgets under its `css_class`.
+    css: gtk::CssProvider,
+    css_class: String,
+    /// The open settings window, so there is only ever one per window.
+    settings_win: RefCell<Option<glib::WeakRef<gtk::ApplicationWindow>>>,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     search_case: gtk::CheckButton,
@@ -62,6 +70,8 @@ pub struct Tab {
     page: gtk::Box,
     header: gtk::Box,
     label: gtk::Label,
+    /// In the header while the tab's output is written to a log file.
+    log_icon: gtk::Image,
     term: vte::Terminal,
     scrollbar: gtk::Scrollbar,
     popover: gtk::PopoverMenu,
@@ -78,7 +88,10 @@ pub struct Tab {
     copy_src: RefCell<Option<glib::SourceId>>,
     /// Refreshes `auto_title` while the program runs.
     title_src: RefCell<Option<glib::SourceId>>,
-    events: RefCell<Vec<String>>,
+    /// The last MAX_EVENTS events.
+    events: RefCell<VecDeque<String>>,
+    /// The latest event and how often it has repeated since.
+    last_event: RefCell<(String, u32)>,
     /// The open Event Log window's text, kept up to date as events arrive.
     event_view: RefCell<Option<glib::WeakRef<gtk::TextBuffer>>>,
     last_size: Cell<(u16, u16)>,
@@ -101,9 +114,13 @@ pub struct Tab {
 thread_local! {
     static PAD_CSS: RefCell<HashSet<u16>> = RefCell::new(HashSet::new());
     static CHROME_CSS_LOADED: Cell<bool> = const { Cell::new(false) };
+    static NEXT_WINDOW: Cell<u32> = const { Cell::new(0) };
 }
 
 const MAX_OUTQ: usize = 16 << 20;
+const MAX_EVENTS: usize = 1000;
+/// Copy All asks first above this many lines of scrollback.
+const COPY_ALL_ASK_LINES: u64 = 1000;
 
 /// The title bar and tabs, as one slim row (about 22px). GTK's defaults are
 /// sized for touch screens, so every part that sets the bar's height gets
@@ -146,16 +163,28 @@ const CHROME_CSS: &str = "
     padding: 0 1px 0 8px;
     margin: 2px 1px;
     border-radius: 4px;
+    transition: background-color 120ms ease-out;
 }
 .moriartty-tab:hover {
     background-color: alpha(currentColor, 0.08);
 }
 .moriartty-tab.active {
-    background-color: alpha(currentColor, 0.16);
+    background-color: alpha(currentColor, 0.14);
+    box-shadow: inset 0 -2px alpha(currentColor, 0.55);
 }
 .moriartty-tab button {
     padding: 1px;
     margin: 0;
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+}
+.moriartty-tab:hover button,
+.moriartty-tab.active button {
+    opacity: 1;
+}
+.moriartty-tab .moriartty-log {
+    color: #e01b24;
+    -gtk-icon-size: 10px;
 }
 ";
 
@@ -218,6 +247,10 @@ fn link_tooltip(url: &str) -> String {
     }
 }
 
+fn css_rgb(c: Rgb) -> String {
+    format!("rgb({},{},{})", c[0], c[1], c[2])
+}
+
 /// Alt+1 … Alt+9: the tab index to go to.
 fn alt_digit(key: gdk::Key, ctrl: bool, shift: bool, alt: bool) -> Option<usize> {
     if !alt || ctrl || shift {
@@ -225,6 +258,29 @@ fn alt_digit(key: gdk::Key, ctrl: bool, shift: bool, alt: bool) -> Option<usize>
     }
     let d = key.to_unicode()?.to_digit(10)?;
     (1..=9).contains(&d).then(|| d as usize - 1)
+}
+
+/// MORIARTTY_DEBUG: the text colour a menu really got, once it is on
+/// screen. It should match the latest "title bar and menus" line; if it
+/// doesn't, something else is styling the menu.
+fn debug_menu_colours(popover: &gtk::Popover, which: &'static str) {
+    if !super::debugging() {
+        return;
+    }
+    popover.connect_map(move |p| {
+        let p = p.downgrade();
+        glib::timeout_add_local_once(Duration::from_millis(200), move || {
+            let Some(p) = p.upgrade() else { return };
+            match p.first_child() {
+                Some(c) => super::debug(format!(
+                    "{which} menu shown: {} text {}",
+                    c.css_name(),
+                    c.color().to_str()
+                )),
+                None => super::debug(format!("{which} menu shown: no contents")),
+            }
+        });
+    });
 }
 
 /// A flat title bar button that leaves the keyboard focus in the terminal.
@@ -239,7 +295,13 @@ fn bar_button(icon: &str, action: &str, tooltip: &str) -> gtk::Button {
 
 pub fn open(app: &gtk::Application, settings: Settings, command: Option<Vec<String>>, cwd: Option<PathBuf>) {
     let tw = TermWindow::new(app, settings);
-    tw.add_tab(command, cwd);
+    let tab = tw.add_tab(command, cwd);
+    // Problems found while loading the saved settings, e.g. a broken
+    // Default Settings file that was moved aside.
+    for n in storage::take_notices() {
+        tab.log_event(&n);
+        tab.feed_status(&n);
+    }
     tw.window.present();
 }
 
@@ -258,11 +320,24 @@ impl TermWindow {
         // It is a WindowHandle: the empty part behaves like any title bar
         // (drag to move, double-click does what the desktop is set to do),
         // so it is deliberately not also a "new tab" area.
-        let strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let strip = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .accessible_role(gtk::AccessibleRole::TabList)
+            .build();
         let strip_scroll = gtk::ScrolledWindow::new();
         strip_scroll.set_policy(gtk::PolicyType::External, gtk::PolicyType::Never);
         strip_scroll.set_propagate_natural_width(true);
         strip_scroll.set_child(Some(&strip));
+        // When the tabs don't all fit, the mouse wheel scrolls them sideways.
+        let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+        wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let sw = strip_scroll.clone();
+        wheel.connect_scroll(move |_, dx, dy| {
+            let adj = sw.hadjustment();
+            adj.set_value(adj.value() + (dx + dy) * 40.0);
+            glib::Propagation::Stop
+        });
+        strip_scroll.add_controller(wheel);
         let add_btn = bar_button("list-add-symbolic", "win.new-tab", "New tab (Ctrl+Shift+T)");
         let filler = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         filler.set_hexpand(true);
@@ -272,6 +347,9 @@ impl TermWindow {
         menu_btn.set_has_frame(false);
         menu_btn.set_menu_model(Some(&build_menu()));
         menu_btn.set_tooltip_text(Some("Menu (also Ctrl+Right-click)"));
+        if let Some(p) = menu_btn.popover() {
+            debug_menu_colours(&p, "title bar");
+        }
         let settings_btn = bar_button("preferences-system-symbolic", "win.change-settings", "Settings (Ctrl+Shift+P)");
         let title_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         title_buttons.append(&settings_btn);
@@ -317,12 +395,29 @@ impl TermWindow {
         vbox.append(&stack);
         window.set_child(Some(&vbox));
 
+        let n = NEXT_WINDOW.with(|c| c.replace(c.get().wrapping_add(1)));
+        let css_class = format!("moriartty-win-{n}");
+        window.add_css_class(&css_class);
+        let css = gtk::CssProvider::new();
+        if let Some(display) = gdk::Display::default() {
+            // Above CHROME_CSS, which it refines for this window.
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &css,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+            );
+        }
+
         let tw = Rc::new(TermWindow {
             app: app.clone(),
             window,
             stack,
             strip,
+            strip_scroll,
             title_buttons,
+            css,
+            css_class,
+            settings_win: RefCell::new(None),
             search_bar,
             search_entry,
             search_case,
@@ -335,12 +430,66 @@ impl TermWindow {
         tw.connect_signals();
         tw.connect_search(&prev_btn, &next_btn);
         tw.install_actions();
+        let w = Rc::downgrade(&tw);
+        style::on_change(move || match w.upgrade() {
+            Some(tw) => {
+                tw.restyle();
+                true
+            }
+            None => false,
+        });
         tw
     }
 
     fn apply_window_settings(&self) {
-        let buttons = self.settings.borrow().title_buttons;
-        self.title_buttons.set_visible(buttons);
+        let s = self.settings.borrow();
+        self.title_buttons.set_visible(s.title_buttons);
+        let c = s.active_colours(style::dark());
+        let cls = &self.css_class;
+        let mut css = String::new();
+        // The title bar and the menus in the terminal's own colours, so the
+        // window reads as one surface. High contrast themes keep their own.
+        if style::high_contrast() {
+            super::debug(format!("{cls}: high contrast, title bar and menus keep the theme's colours"));
+        } else {
+            let (bg, fg) = (css_rgb(c.background), css_rgb(c.foreground));
+            super::debug(format!("{cls}: title bar and menus: background {bg}, text {fg}"));
+            css.push_str(&format!(
+                ".{cls} .moriartty-bar {{ background-color: {bg}; color: {fg}; }}\n\
+                 .{cls} popover > contents, .{cls} popover > arrow {{ background-color: {bg}; color: {fg}; }}\n\
+                 .{cls} popover modelbutton:hover {{ background-color: alpha(currentColor, 0.1); }}\n"
+            ));
+        }
+        if s.background_opacity < 100 {
+            css.push_str(&format!("window.{cls} {{ background-color: transparent; }}\n"));
+        }
+        drop(s);
+        self.css.load_from_string(&css);
+    }
+
+    /// Settings or the desktop's style changed: window and all its tabs.
+    fn restyle(&self) {
+        super::debug(format!("{}: restyle (dark: {})", self.css_class, style::dark()));
+        self.apply_window_settings();
+        for tab in self.tabs_snapshot() {
+            tab.apply_appearance();
+            tab.check_size_after_layout();
+        }
+        super::debug(format!("{}: restyle done", self.css_class));
+    }
+
+    /// Live preview from the settings window. Only the look changes; Apply
+    /// makes it stick, and closing the settings window without applying
+    /// previews the old settings again.
+    fn preview(&self, s: &Settings) {
+        {
+            let mut cur = self.settings.borrow_mut();
+            cur.auto_colours = s.auto_colours;
+            cur.colours = s.colours.clone();
+            cur.bold_as_colour = s.bold_as_colour;
+            cur.background_opacity = s.background_opacity;
+        }
+        self.restyle();
     }
 
     // ------------------------------------------------------------------ tabs
@@ -361,11 +510,13 @@ impl TermWindow {
     fn select_tab(self: &Rc<Self>, tab: &Rc<Tab>) {
         self.stack.set_visible_child(&tab.page);
         for t in self.tabs_snapshot() {
-            if Rc::ptr_eq(&t, tab) {
+            let current = Rc::ptr_eq(&t, tab);
+            if current {
                 t.header.add_css_class("active");
             } else {
                 t.header.remove_css_class("active");
             }
+            t.header.update_state(&[gtk::accessible::State::Selected(Some(current))]);
         }
         tab.attention.set(false);
         tab.update_label();
@@ -373,6 +524,7 @@ impl TermWindow {
         let (w, t) = (Rc::downgrade(self), Rc::downgrade(tab));
         glib::idle_add_local_once(move || {
             let (Some(win), Some(tab)) = (w.upgrade(), t.upgrade()) else { return };
+            win.reveal_tab(&tab);
             tab.check_size();
             if win.search_bar.is_search_mode() {
                 win.search_update();
@@ -487,22 +639,66 @@ impl TermWindow {
         self.select_tab(&tabs[next]);
     }
 
+    fn tab_index(&self, tab: &Tab) -> Option<usize> {
+        self.tabs.borrow().iter().position(|t| std::ptr::eq(Rc::as_ptr(t), tab))
+    }
+
     /// Ctrl+Shift+PgUp / Ctrl+Shift+PgDn.
     fn move_tab(&self, tab: &Tab, forward: bool) {
+        let Some(i) = self.tab_index(tab) else { return };
+        let to = match (forward, i.checked_sub(1)) {
+            (true, _) => i + 1,
+            (false, Some(j)) => j,
+            (false, None) => return,
+        };
+        self.move_tab_to(tab, to);
+    }
+
+    /// Put a tab at position `to` (counted as if it were not in the list).
+    fn move_tab_to(&self, tab: &Tab, to: usize) {
         let order = {
             let mut tabs = self.tabs.borrow_mut();
             let Some(i) = tabs.iter().position(|t| std::ptr::eq(Rc::as_ptr(t), tab)) else { return };
-            let j = if forward { i + 1 } else { i.wrapping_sub(1) };
-            if j >= tabs.len() {
+            if i == to || to >= tabs.len() {
                 return;
             }
-            tabs.swap(i, j);
+            let t = tabs.remove(i);
+            tabs.insert(to, t);
             tabs.clone()
         };
         let mut prev: Option<gtk::Widget> = None;
         for t in &order {
             self.strip.reorder_child_after(&t.header, prev.as_ref());
             prev = Some(t.header.clone().upcast());
+        }
+    }
+
+    /// Dragging a tab's header: it moves to where the pointer is (`x`, in
+    /// the strip's coordinates), after every other tab whose middle is to
+    /// the left of the pointer.
+    fn drag_tab_to(&self, tab: &Tab, x: f64) {
+        let to = self
+            .tabs_snapshot()
+            .iter()
+            .filter(|t| !std::ptr::eq(Rc::as_ptr(t), tab))
+            .filter(|t| {
+                t.header
+                    .compute_bounds(&self.strip)
+                    .is_some_and(|b| f64::from(b.x() + b.width() / 2.0) < x)
+            })
+            .count();
+        self.move_tab_to(tab, to);
+    }
+
+    /// Scroll the tab strip so the tab's header is fully visible.
+    fn reveal_tab(&self, tab: &Tab) {
+        let Some(b) = tab.header.compute_bounds(&self.strip) else { return };
+        let adj = self.strip_scroll.hadjustment();
+        let (x, w) = (f64::from(b.x()), f64::from(b.width()));
+        if x < adj.value() {
+            adj.set_value(x);
+        } else if x + w > adj.value() + adj.page_size() {
+            adj.set_value(x + w - adj.page_size());
         }
     }
 
@@ -598,7 +794,9 @@ impl TermWindow {
         });
 
         let w = Rc::downgrade(self);
-        self.window.connect_destroy(move |_| {
+        let css = self.css.clone();
+        self.window.connect_destroy(move |win| {
+            gtk::style_context_remove_provider_for_display(&WidgetExt::display(win), &css);
             if let Some(tw) = w.upgrade() {
                 for t in tw.tabs_snapshot() {
                     t.popover.unparent();
@@ -762,11 +960,7 @@ impl TermWindow {
     fn install_actions(self: &Rc<Self>) {
         self.add_tab_action("copy", |t| t.copy());
         self.add_tab_action("paste", |t| t.paste(false));
-        self.add_tab_action("copy-all", |t| {
-            t.term.select_all();
-            t.term.copy_clipboard_format(vte::Format::Text);
-            t.term.unselect_all();
-        });
+        self.add_tab_action("copy-all", |t| t.copy_all());
         self.add_tab_action("clear-scrollback", |t| {
             let n = t.settings.borrow().scrollback;
             t.term.set_scrollback_lines(0);
@@ -794,23 +988,58 @@ impl TermWindow {
                 .program_name("Moriartty")
                 .logo_icon_name(crate::APP_ID)
                 .version(env!("CARGO_PKG_VERSION"))
-                .comments("A PuTTY-style terminal emulator")
+                .comments("A fast, private-by-default terminal inspired by PuTTY's pterm")
                 .license_type(gtk::License::MitX11)
                 .build()
                 .present();
         });
         self.add_action("change-settings", |tw| {
-            let w = Rc::downgrade(tw);
+            // One settings window per terminal window. One that is no
+            // longer shown has gone (destroyed, or on its way): never
+            // present that again, open a new one instead.
+            let stored = tw.settings_win.borrow().as_ref().and_then(|w| w.upgrade());
+            match stored {
+                Some(win) if win.is_visible() => {
+                    super::debug("settings: already open, presenting it");
+                    win.present();
+                    return;
+                }
+                Some(win) => super::debug(format!(
+                    "settings: stored window is no longer shown (realized: {}), opening a new one",
+                    win.is_realized()
+                )),
+                None => super::debug("settings: opening"),
+            }
+            let (wa, wp) = (Rc::downgrade(tw), Rc::downgrade(tw));
             let s = tw.settings.borrow().clone();
-            config_dialog::show(
+            let win = config_dialog::show(
                 &tw.app,
                 s,
-                Mode::Reconfigure(Rc::new(move |new| {
-                    if let Some(tw) = w.upgrade() {
-                        tw.reconfigure(new);
-                    }
-                })),
+                Mode::Reconfigure {
+                    apply: Rc::new(move |new| {
+                        if let Some(tw) = wa.upgrade() {
+                            tw.reconfigure(new);
+                        }
+                    }),
+                    preview: Rc::new(move |s: &Settings| {
+                        if let Some(tw) = wp.upgrade() {
+                            tw.preview(s);
+                        }
+                    }),
+                },
             );
+            super::debug(format!("settings: opened (visible: {})", win.is_visible()));
+            // Forget it once destroyed: a destroyed window can linger in
+            // memory, and presenting it again leaves a dead window that
+            // no button closes.
+            let w = Rc::downgrade(tw);
+            win.connect_destroy(move |_| {
+                super::debug("settings: forgotten");
+                if let Some(tw) = w.upgrade() {
+                    tw.settings_win.borrow_mut().take();
+                }
+            });
+            *tw.settings_win.borrow_mut() = Some(win.downgrade());
         });
         self.set_action_enabled("restart", false);
     }
@@ -908,8 +1137,17 @@ impl Tab {
         close_btn.set_has_frame(false);
         close_btn.set_focus_on_click(false);
         close_btn.set_tooltip_text(Some("Close tab (Ctrl+Shift+W, or middle-click the tab)"));
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        close_btn.update_property(&[gtk::accessible::Property::Label("Close tab")]);
+        let log_icon = gtk::Image::from_icon_name("media-record-symbolic");
+        log_icon.add_css_class("moriartty-log");
+        log_icon.set_visible(false);
+        let header = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .accessible_role(gtk::AccessibleRole::Tab)
+            .build();
         header.add_css_class("moriartty-tab");
+        header.append(&log_icon);
         header.append(&label);
         header.append(&close_btn);
 
@@ -917,6 +1155,7 @@ impl Tab {
         popover.set_parent(&term);
         popover.set_has_arrow(false);
         popover.set_halign(gtk::Align::Start);
+        debug_menu_colours(popover.upcast_ref(), "right-click");
 
         let tab = Rc::new(Tab {
             win: Rc::downgrade(win),
@@ -925,6 +1164,7 @@ impl Tab {
             page,
             header,
             label,
+            log_icon,
             term,
             scrollbar,
             popover,
@@ -938,7 +1178,8 @@ impl Tab {
             out_src: RefCell::new(None),
             copy_src: RefCell::new(None),
             title_src: RefCell::new(None),
-            events: RefCell::new(Vec::new()),
+            events: RefCell::new(VecDeque::new()),
+            last_event: RefCell::new((String::new(), 0)),
             event_view: RefCell::new(None),
             last_size: Cell::new((0, 0)),
             generation: Cell::new(0),
@@ -964,37 +1205,62 @@ impl Tab {
                 win.close_tab(&tab);
             }
         });
-        // Clicks on the rest of the header: select, middle-click closes.
-        // Claimed, so they don't drag the window. Presses on the close
-        // button are left alone: claiming them here would cancel the
-        // button's own click, and the × would do nothing.
-        let click = gtk::GestureClick::new();
-        click.set_button(0);
-        let w = Rc::downgrade(&tab);
+        // Presses on the rest of the header: the left button selects (and
+        // dragging moves the tab), the middle one closes. Claimed, so they
+        // don't drag the window. Presses on the close button are left
+        // alone: claiming them here would cancel the button's own click,
+        // and the × would do nothing.
         let close_ref = close_btn.downgrade();
+        let on_close = move |header: &gtk::Box, x: f64, y: f64| match (
+            header.pick(x, y, gtk::PickFlags::DEFAULT),
+            close_ref.upgrade(),
+        ) {
+            (Some(hit), Some(close)) => hit == *close.upcast_ref::<gtk::Widget>() || hit.is_ancestor(&close),
+            _ => false,
+        };
+        let on_close = Rc::new(on_close);
+
+        let click = gtk::GestureClick::new();
+        click.set_button(2);
+        let (w, oc) = (Rc::downgrade(&tab), on_close.clone());
         click.connect_pressed(move |g, _, x, y| {
             let Some(tab) = w.upgrade() else { return };
             let Some(win) = tab.win.upgrade() else { return };
-            let on_close = match (tab.header.pick(x, y, gtk::PickFlags::DEFAULT), close_ref.upgrade()) {
-                (Some(hit), Some(close)) => hit == *close.upcast_ref::<gtk::Widget>() || hit.is_ancestor(&close),
-                _ => false,
-            };
-            if on_close {
-                return;
-            }
-            match g.current_button() {
-                1 => {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    win.select_tab(&tab);
-                }
-                2 => {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    win.close_tab(&tab);
-                }
-                _ => {}
+            if !oc(&tab.header, x, y) {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                win.close_tab(&tab);
             }
         });
         tab.header.add_controller(click);
+
+        // Where the drag started, in the strip's coordinates; None when the
+        // press was on the close button.
+        let drag_origin: Rc<Cell<Option<f64>>> = Rc::default();
+        let drag = gtk::GestureDrag::new();
+        let (w, oc, origin) = (Rc::downgrade(&tab), on_close, drag_origin.clone());
+        drag.connect_drag_begin(move |g, x, y| {
+            origin.set(None);
+            let Some(tab) = w.upgrade() else { return };
+            let Some(win) = tab.win.upgrade() else { return };
+            if oc(&tab.header, x, y) {
+                g.set_state(gtk::EventSequenceState::Denied);
+                return;
+            }
+            g.set_state(gtk::EventSequenceState::Claimed);
+            win.select_tab(&tab);
+            let start = graphene::Point::new(x as f32, y as f32);
+            origin.set(tab.header.compute_point(&win.strip, &start).map(|p| f64::from(p.x())));
+        });
+        let (w, origin) = (Rc::downgrade(&tab), drag_origin);
+        drag.connect_drag_update(move |_, dx, _| {
+            // A small wobble while clicking is not a drag.
+            let Some(x0) = origin.get().filter(|_| dx.abs() > 8.0) else { return };
+            let Some(tab) = w.upgrade() else { return };
+            if let Some(win) = tab.win.upgrade() {
+                win.drag_tab_to(&tab, x0 + dx);
+            }
+        });
+        tab.header.add_controller(drag);
 
         let w = Rc::downgrade(&tab);
         *on_allocate.borrow_mut() = Some(Box::new(move || {
@@ -1011,10 +1277,13 @@ impl Tab {
         let s = self.settings.borrow();
         let t = &self.term;
         t.set_font(Some(&pango::FontDescription::from_string(&s.font)));
-        let c = &s.colours;
+        let c = s.active_colours(style::dark());
         let palette: Vec<gdk::RGBA> = c.ansi.iter().map(|x| rgba(*x)).collect();
         let palette_refs: Vec<&gdk::RGBA> = palette.iter().collect();
-        t.set_colors(Some(&rgba(c.foreground)), Some(&rgba(c.background)), &palette_refs);
+        let bg = rgba(c.background);
+        let alpha = s.background_opacity.clamp(30, 100) as f32 / 100.0;
+        let bg = gdk::RGBA::new(bg.red(), bg.green(), bg.blue(), alpha);
+        t.set_colors(Some(&rgba(c.foreground)), Some(&bg), &palette_refs);
         t.set_color_bold(Some(&rgba(c.bold_foreground)));
         t.set_color_cursor(Some(&rgba(c.cursor)));
         t.set_color_cursor_foreground(Some(&rgba(c.cursor_text)));
@@ -1080,27 +1349,29 @@ impl Tab {
         }
     }
 
-    /// The safe http(s) link under widget coordinates (x, y), if any:
-    /// a matched URL, or an OSC 8 hyperlink when those are allowed.
-    fn link_at(&self, x: f64, y: f64) -> Option<String> {
+    /// The safe http(s) link under widget coordinates (x, y), if any: a
+    /// matched URL, or an OSC 8 hyperlink when those are allowed. The flag
+    /// is true for a hyperlink, whose visible text the program chose and
+    /// which may say something other than where it goes.
+    fn link_at(&self, x: f64, y: f64) -> Option<(String, bool)> {
         if let Some(tag) = self.url_tag.get() {
             let (m, t) = self.term.check_match_at(x, y);
             if t == tag {
                 if let Some(url) = m.and_then(|m| matching::safe_url(&m)) {
-                    return Some(url);
+                    return Some((url, false));
                 }
             }
         }
         if self.settings.borrow().allow_hyperlinks {
             if let Some(url) = self.term.check_hyperlink_at(x, y).and_then(|h| matching::safe_url(&h)) {
-                return Some(url);
+                return Some((url, true));
             }
         }
         None
     }
 
     fn update_link_tooltip(&self, x: f64, y: f64) {
-        let link = self.link_at(x, y);
+        let link = self.link_at(x, y).map(|(url, _)| url);
         if *self.hover_url.borrow() == link {
             return;
         }
@@ -1108,8 +1379,37 @@ impl Tab {
         *self.hover_url.borrow_mut() = link;
     }
 
-    fn open_url(&self, url: &str) {
-        match matching::idn_ascii_host(url) {
+    /// Ctrl+click on a link. A URL shown as plain ASCII text opens at once:
+    /// what you see is where it goes. A hyperlink, or an international host
+    /// name that may imitate another site, asks first and shows the real
+    /// address.
+    fn open_url(self: &Rc<Self>, url: String, hyperlink: bool) {
+        let idn = matching::idn_ascii_host(&url);
+        if !hyperlink && idn.is_none() {
+            self.launch_url(&url, None);
+            return;
+        }
+        let tab = self.clone();
+        glib::spawn_future_local(async move {
+            let mut detail = url.clone();
+            if let Some(host) = &idn {
+                detail.push_str(&format!(
+                    "\n\n⚠ International address: the real host is {host}. \
+                     It may imitate another site."
+                ));
+            }
+            if hyperlink {
+                detail.push_str("\n\nThe program chose this link's text, which may not match where it goes.");
+            }
+            let r = ask(&tab.window, "Open this link?", &detail, &["Cancel", "Open"], 0, 0).await;
+            if r == 1 && !tab.closed.get() {
+                tab.launch_url(&url, idn.as_deref());
+            }
+        });
+    }
+
+    fn launch_url(&self, url: &str, idn: Option<&str>) {
+        match idn {
             Some(host) => self.log_event(format!("Opening {url} (real host {host})")),
             None => self.log_event(format!("Opening {url}")),
         }
@@ -1146,7 +1446,7 @@ impl Tab {
         let s = self.settings.borrow();
         let remote = self.remote_title.borrow().clone().filter(|_| !s.no_remote_wintitle);
         let base = remote
-            .or_else(|| (!s.wintitle.is_empty()).then(|| s.wintitle.clone()))
+            .or_else(|| (!s.wintitle.is_empty()).then(|| strip_controls(&s.wintitle, 200)))
             .or_else(|| self.auto_title.borrow().clone())
             .unwrap_or_else(|| "Moriartty".to_string());
         if self.ended.get() {
@@ -1166,6 +1466,7 @@ impl Tab {
             self.label.set_markup(&text);
         }
         self.header.set_tooltip_text(Some(&title));
+        self.header.update_property(&[gtk::accessible::Property::Label(&title)]);
     }
 
     fn update_title(&self) {
@@ -1199,11 +1500,13 @@ impl Tab {
             }
         });
 
-        // Copy on select (debounced, so dragging doesn't spam the clipboard).
+        // VTE puts every selection in PRIMARY itself. Copying it to the
+        // clipboard too is opt-in (debounced, so dragging doesn't spam the
+        // clipboard).
         let w = weak.clone();
         self.term.connect_selection_changed(move |_| {
             let Some(tab) = w.upgrade() else { return };
-            if !tab.settings.borrow().copy_on_select {
+            if !tab.settings.borrow().copy_to_clipboard {
                 return;
             }
             if let Some(id) = tab.copy_src.borrow_mut().take() {
@@ -1250,9 +1553,9 @@ impl Tab {
             if !g.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
                 return;
             }
-            if let Some(url) = tab.link_at(x, y) {
+            if let Some((url, hyperlink)) = tab.link_at(x, y) {
                 g.set_state(gtk::EventSequenceState::Claimed);
-                tab.open_url(&url);
+                tab.open_url(url, hyperlink);
             }
         });
         self.term.add_controller(click);
@@ -1277,11 +1580,16 @@ impl Tab {
                 return glib::Propagation::Proceed;
             }
             let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
-            let action = tab.settings.borrow().mouse_action;
+            let (action, to_clipboard) = {
+                let s = tab.settings.borrow();
+                (s.mouse_action, s.copy_to_clipboard)
+            };
             match (be.button(), ctrl) {
                 (3, true) => tab.show_menu(),
                 (3, false) => match action {
-                    MouseAction::Compromise => tab.paste(false),
+                    // Right-click pastes what selecting copied: PRIMARY, or
+                    // the clipboard when selections are copied there too.
+                    MouseAction::Compromise => tab.paste(!to_clipboard),
                     MouseAction::Windows => tab.show_menu(),
                     MouseAction::Xterm => return glib::Propagation::Proceed,
                 },
@@ -1363,19 +1671,48 @@ impl Tab {
 
     // -------------------------------------------------------------- session
 
+    /// Add to the Event Log. A message repeating back to back (say,
+    /// "Output queue full") is counted rather than logged again.
     fn log_event(&self, msg: impl AsRef<str>) {
+        let msg = strip_controls(msg.as_ref(), 4000);
+        let repeats = {
+            let mut last = self.last_event.borrow_mut();
+            if last.0 == msg {
+                last.1 = last.1.saturating_add(1);
+                return;
+            }
+            std::mem::replace(&mut *last, (msg.clone(), 0)).1
+        };
+        if repeats > 0 {
+            let s = if repeats == 1 { "" } else { "s" };
+            self.push_event(&format!("(previous message repeated {repeats} more time{s})"));
+        }
+        self.push_event(&msg);
+    }
+
+    /// Append one line, keeping only the last MAX_EVENTS.
+    fn push_event(&self, msg: &str) {
         let ts = glib::DateTime::now_local()
             .ok()
             .and_then(|d| d.format("%Y-%m-%d %H:%M:%S").ok())
             .map(|s| s.to_string())
             .unwrap_or_default();
-        let line = format!("{ts}\t{}", strip_controls(msg.as_ref(), 4000));
+        let line = format!("{ts}\t{msg}");
         let view = self.event_view.borrow().as_ref().and_then(|w| w.upgrade());
         if let Some(buf) = view {
             let sep = if buf.char_count() > 0 { "\n" } else { "" };
             buf.insert(&mut buf.end_iter(), &format!("{sep}{line}"));
+            if buf.line_count() > MAX_EVENTS as i32 {
+                if let Some(mut second) = buf.iter_at_line(1) {
+                    buf.delete(&mut buf.start_iter(), &mut second);
+                }
+            }
         }
-        self.events.borrow_mut().push(line);
+        let mut events = self.events.borrow_mut();
+        events.push_back(line);
+        if events.len() > MAX_EVENTS {
+            events.pop_front();
+        }
     }
 
     /// Print a status line into the terminal itself.
@@ -1436,12 +1773,16 @@ impl Tab {
         self.generation.set(gen);
 
         let mut log = None;
+        let mut log_path = None;
         if s.log_type != LogType::None {
             match self.prepare_log(&s).await {
                 Ok(Some((path, file))) => {
                     self.log_event(format!("Logging to {}", path.display()));
                     match SessionLog::new(file, s.log_type, s.log_flush, s.log_header) {
-                        Ok(l) => log = Some(l),
+                        Ok(l) => {
+                            log = Some(l);
+                            log_path = Some(path);
+                        }
                         Err(e) => self.log_event(format!("Logging disabled: {e}")),
                     }
                 }
@@ -1470,6 +1811,7 @@ impl Tab {
                 self.log_event(desc);
                 let fd = pty.raw_fd();
                 *self.session.borrow_mut() = Some(Session { pty, log });
+                self.show_logging(log_path.as_deref());
                 let w = Rc::downgrade(&self);
                 let id = glib::unix_fd_add_local(
                     fd,
@@ -1547,6 +1889,7 @@ impl Tab {
         };
         if let Some(e) = log_error {
             self.log_event(format!("Logging stopped: {e}"));
+            self.show_logging(None);
         }
         if !data.is_empty() {
             self.term.feed(&data);
@@ -1686,6 +2029,15 @@ impl Tab {
         let sess = self.session.borrow_mut().take();
         drop(sess);
         self.outq.borrow_mut().clear();
+        self.show_logging(None);
+    }
+
+    /// The header's logging indicator: whether this tab's output is being
+    /// recorded, and where, is always visible.
+    fn show_logging(&self, path: Option<&Path>) {
+        self.log_icon.set_visible(path.is_some());
+        let tip = path.map(|p| format!("This tab's output is logged to {}", p.display()));
+        self.log_icon.set_tooltip_text(tip.as_deref());
     }
 
     fn restart(self: &Rc<Self>) {
@@ -1720,6 +2072,40 @@ impl Tab {
         }
     }
 
+    /// Copy All: the whole scrollback to the clipboard. Scrollback can hold
+    /// secrets and clipboard managers keep what reaches the clipboard, so a
+    /// large one asks first.
+    fn copy_all(self: &Rc<Self>) {
+        // VTE's adjustment counts rows: scrollback plus screen.
+        let lines = self.term.vadjustment().map_or(0.0, |a| a.upper()) as u64;
+        if lines <= COPY_ALL_ASK_LINES {
+            self.copy_all_now();
+            return;
+        }
+        let tab = self.clone();
+        glib::spawn_future_local(async move {
+            let r = ask(
+                &tab.window,
+                &format!("Copy all {lines} lines to the clipboard?"),
+                "The scrollback may contain passwords or other secrets, and clipboard \
+                 managers keep a copy of everything that is copied.",
+                &["Cancel", "Copy"],
+                0,
+                1,
+            )
+            .await;
+            if r == 1 && !tab.closed.get() {
+                tab.copy_all_now();
+            }
+        });
+    }
+
+    fn copy_all_now(&self) {
+        self.term.select_all();
+        self.term.copy_clipboard_format(vte::Format::Text);
+        self.term.unselect_all();
+    }
+
     fn paste(self: &Rc<Self>, primary: bool) {
         let clip = if primary {
             self.term.primary_clipboard()
@@ -1745,13 +2131,21 @@ impl Tab {
                 return;
             }
             let breaks = clean.matches('\r').count();
-            if confirm && breaks > 0 {
-                let lines = breaks + usize::from(!clean.ends_with('\r'));
+            // Invisible or direction-changing characters can make even one
+            // line run something other than what it shows.
+            let hidden = clean.chars().any(is_invisible);
+            if confirm && (breaks > 0 || hidden) {
+                let question = if breaks > 0 {
+                    let lines = breaks + usize::from(!clean.ends_with('\r'));
+                    format!("Paste {lines} lines into the terminal?")
+                } else {
+                    "Paste text containing hidden characters?".to_string()
+                };
                 // Cancel is the default: an Enter pressed out of habit
                 // right after pasting must not confirm it.
                 let r = ask(
                     &tab.window,
-                    &format!("Paste {lines} lines into the terminal?"),
+                    &question,
                     &paste_preview(&clean, 400),
                     &["Cancel", "Paste"],
                     0,
@@ -1830,7 +2224,8 @@ impl Tab {
             .default_height(380)
             .build();
         let buf = gtk::TextBuffer::new(None);
-        buf.set_text(&self.events.borrow().join("\n"));
+        let text = self.events.borrow().iter().map(String::as_str).collect::<Vec<_>>().join("\n");
+        buf.set_text(&text);
         *self.event_view.borrow_mut() = Some(buf.downgrade());
         let tv = gtk::TextView::with_buffer(&buf);
         tv.set_editable(false);

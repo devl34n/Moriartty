@@ -6,6 +6,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::time::Duration;
 
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
@@ -34,14 +35,17 @@ pub struct Pty {
     is_shell: bool,
 }
 
+/// `$SHELL`, else the passwd entry, else /bin/sh. Only an absolute path to
+/// an executable file counts.
 fn login_shell() -> PathBuf {
+    let usable = |p: &Path| p.is_absolute() && p.to_str().is_some_and(|s| validate::program(s).is_ok());
     if let Some(sh) = std::env::var_os("SHELL").map(PathBuf::from) {
-        if sh.is_absolute() && sh.exists() {
+        if usable(&sh) {
             return sh;
         }
     }
     if let Ok(Some(u)) = nix::unistd::User::from_uid(nix::unistd::getuid()) {
-        if u.shell.is_absolute() && u.shell.exists() {
+        if usable(&u.shell) {
             return u.shell;
         }
     }
@@ -219,8 +223,18 @@ impl Drop for Pty {
                     let _ = kill(Pid::from_raw(pid), Signal::SIGHUP);
                 }
             }
-            // Reap in the background so no zombie is left behind.
+            // Reap in the background so no zombie is left behind. A program
+            // that ignores the hangup is killed after a grace period, so
+            // this thread never waits forever. The child is not reaped
+            // before the kill, so its pid can't have been reused.
             std::thread::spawn(move || {
+                for _ in 0..20 {
+                    match child.try_wait() {
+                        Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                        _ => return,
+                    }
+                }
+                let _ = child.kill();
                 let _ = child.wait();
             });
         }

@@ -1,4 +1,5 @@
-//! Moriartty — a PuTTY-style (pterm) terminal emulator for Linux.
+//! Moriartty — a fast, private-by-default terminal emulator for Linux,
+//! inspired by PuTTY's pterm.
 //!
 //! All `unsafe` code is confined to `sys.rs`; everything else is safe Rust.
 #![deny(unsafe_code)]
@@ -64,12 +65,24 @@ fn main() -> glib::ExitCode {
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
-    app.connect_activate(move |app| match &launch {
-        cli::Launch::Configure(s) => {
-            ui::config_dialog::show(app, s.clone(), ui::config_dialog::Mode::New)
+    app.connect_activate(move |app| {
+        // First line of every debug log: which build, on which libraries.
+        ui::debug(format!(
+            "moriartty {}, GTK {}.{}.{}, VTE {}",
+            env!("CARGO_PKG_VERSION"),
+            gtk::major_version(),
+            gtk::minor_version(),
+            gtk::micro_version(),
+            sys::vte_version(),
+        ));
+        ui::style::init();
+        match &launch {
+            cli::Launch::Configure(s) => {
+                ui::config_dialog::show(app, s.clone(), ui::config_dialog::Mode::New);
+            }
+            cli::Launch::Open(s, cmd, dir) => ui::terminal::open(app, s.clone(), cmd.clone(), dir.clone()),
+            cli::Launch::Help | cli::Launch::Version => {}
         }
-        cli::Launch::Open(s, cmd, dir) => ui::terminal::open(app, s.clone(), cmd.clone(), dir.clone()),
-        cli::Launch::Help | cli::Launch::Version => {}
     });
 
     app.run_with_args(&["moriartty"])

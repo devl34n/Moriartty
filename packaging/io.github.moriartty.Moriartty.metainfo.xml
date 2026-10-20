@@ -6,22 +6,23 @@
   <project_license>MIT</project_license>
 
   <name>Moriartty</name>
-  <summary>PuTTY-style terminal emulator</summary>
+  <summary>Private, PuTTY-inspired terminal</summary>
   <developer id="io.github.devl34n">
     <name>devl34n</name>
   </developer>
 
   <description>
     <p>
-      Moriartty is a terminal emulator for people who grew up on PuTTY. It keeps
-      PuTTY's habits — copy on select, right-click paste and the familiar
-      configuration tree — in a native GTK 4 application.
+      Moriartty is a fast, private-by-default terminal emulator inspired by
+      PuTTY's pterm. It keeps PuTTY's habits — copy on select, right-click
+      paste and the familiar configuration tree — in a native GTK 4
+      application, with no network access and no telemetry.
     </p>
     <ul>
       <li>Copy on select and right-click paste, on by default</li>
       <li>Safe paste: escape sequences and hidden control characters are stripped, multi-line pastes ask first</li>
       <li>Tabs, find in scrollback, font zoom and Ctrl+click web links</li>
-      <li>Colour schemes: PuTTY classic, Tango, Solarized and Dracula</li>
+      <li>Moriartty Dark and Light colours that follow the desktop, plus PuTTY classic, Tango, Solarized and Dracula</li>
       <li>Saved settings profiles and session logging</li>
     </ul>
   </description>
@@ -50,6 +51,33 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.6.0" date="2026-10-20">
+      <description>
+        <p>A fresh look.</p>
+        <ul>
+          <li>New Moriartty Dark and Light colours that follow the desktop's light or dark style</li>
+          <li>The title bar matches the terminal's colours</li>
+          <li>Tabs can be dragged to reorder them and scrolled with the mouse wheel</li>
+          <li>More room around the text, and optional background transparency</li>
+          <li>Colour changes are previewed live in the settings window</li>
+          <li>Sharper, square application icons</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.0" date="2026-10-20">
+      <description>
+        <p>Safer, more private defaults.</p>
+        <ul>
+          <li>Selected text no longer goes to the clipboard unless you turn that on; right-click still pastes it</li>
+          <li>Hyperlinks set by programs and international web addresses ask before opening</li>
+          <li>Links with hidden characters are refused</li>
+          <li>Pastes with hidden characters are shown before they are sent</li>
+          <li>Copying a large scrollback asks first</li>
+          <li>A tab shows when its output is being logged</li>
+          <li>Unreadable saved settings are kept aside instead of being overwritten</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.4" date="2026-10-19">
       <description>
         <p>The close button on a tab works again.</p>

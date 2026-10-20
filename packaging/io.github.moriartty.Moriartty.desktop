@@ -2,7 +2,7 @@
 Type=Application
 Name=Moriartty
 GenericName=Terminal
-Comment=PuTTY-style terminal emulator
+Comment=Private, PuTTY-inspired terminal
 Exec=moriartty
 Icon=io.github.moriartty.Moriartty
 Terminal=false

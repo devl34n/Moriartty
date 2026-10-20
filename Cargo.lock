@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "moriartty"
-version = "0.4.4"
+version = "0.6.0"
 dependencies = [
  "gtk4",
  "libc",

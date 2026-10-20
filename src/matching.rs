@@ -14,6 +14,10 @@ pub const URL_REGEX: &str =
 /// Anything else (file:, javascript:, custom schemes, ...) is refused, and
 /// so are links with a user name before the host, a classic way to make
 /// `https://bank.example@evil.example/` look like it goes to the bank.
+/// Also refused: invisible and direction-changing characters, which make a
+/// link read differently from where it goes, and a backslash in the host
+/// part, which browsers treat as "/" (`https://evil.example\.bank.example/`
+/// goes to evil.example).
 pub fn safe_url(raw: &str) -> Option<String> {
     let url = raw.trim();
     let lower = url.to_ascii_lowercase();
@@ -23,8 +27,11 @@ pub fn safe_url(raw: &str) -> Option<String> {
     if !scheme_ok
         || authority.is_empty()
         || authority.contains('@')
+        || authority.contains('\\')
         || url.len() > 2048
-        || url.chars().any(|c| c.is_control() || c.is_whitespace())
+        || url
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || crate::paste::is_invisible(c))
     {
         return None;
     }
@@ -167,6 +174,10 @@ mod tests {
         assert!(safe_url("https://exa mple.com").is_none());
         assert!(safe_url("https://example.com/\x1b[31m").is_none());
         assert!(safe_url(&format!("https://e.com/{}", "a".repeat(3000))).is_none());
+        assert!(safe_url("https://evil.example\\.bank.example/").is_none());
+        assert!(safe_url("https://example.com/\u{202E}gpj.exe").is_none());
+        assert!(safe_url("https://exa\u{200B}mple.com/").is_none());
+        assert!(safe_url("https://example.com/a\\b").is_some());
     }
 
     #[test]

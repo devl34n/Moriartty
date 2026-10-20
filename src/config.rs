@@ -85,11 +85,92 @@ pub struct Colours {
 }
 
 impl Default for Colours {
-    /// PuTTY's default palette.
+    /// Moriartty Dark.
     fn default() -> Self {
         SCHEMES[0].1.clone()
     }
 }
+
+/// The default look: muted, readable colours with the logo's red as the
+/// accent. Used with its light twin when following the desktop's style.
+pub const MORIARTTY_DARK: Colours = Colours {
+    foreground: [214, 217, 224],
+    bold_foreground: [255, 255, 255],
+    background: [27, 29, 35],
+    cursor_text: [27, 29, 35],
+    cursor: [229, 72, 77],
+    ansi: [
+        [42, 45, 53],
+        [229, 72, 77],
+        [95, 179, 122],
+        [224, 178, 77],
+        [91, 155, 240],
+        [184, 133, 232],
+        [79, 191, 196],
+        [197, 201, 211],
+        [92, 98, 112],
+        [255, 107, 111],
+        [127, 211, 154],
+        [242, 204, 107],
+        [127, 180, 255],
+        [209, 166, 255],
+        [114, 219, 224],
+        [242, 244, 248],
+    ],
+};
+
+pub const MORIARTTY_LIGHT: Colours = Colours {
+    foreground: [42, 45, 53],
+    bold_foreground: [0, 0, 0],
+    background: [250, 250, 250],
+    cursor_text: [250, 250, 250],
+    cursor: [196, 37, 43],
+    ansi: [
+        [42, 45, 53],
+        [196, 37, 43],
+        [46, 133, 64],
+        [154, 107, 0],
+        [31, 99, 198],
+        [138, 63, 199],
+        [18, 127, 135],
+        [107, 114, 128],
+        [75, 81, 96],
+        [229, 72, 77],
+        [63, 162, 87],
+        [184, 134, 11],
+        [59, 130, 246],
+        [168, 85, 247],
+        [14, 165, 176],
+        [156, 163, 175],
+    ],
+};
+
+/// PuTTY's default palette, the default before 0.6.
+pub const PUTTY: Colours = Colours {
+    foreground: [187, 187, 187],
+    bold_foreground: [255, 255, 255],
+    background: [0, 0, 0],
+    cursor_text: [0, 0, 0],
+    cursor: [0, 255, 0],
+    ansi: [
+        [0, 0, 0],
+        [187, 0, 0],
+        [0, 187, 0],
+        [187, 187, 0],
+        [0, 0, 187],
+        [187, 0, 187],
+        [0, 187, 187],
+        [187, 187, 187],
+        [85, 85, 85],
+        [255, 85, 85],
+        [85, 255, 85],
+        [255, 255, 85],
+        [85, 85, 255],
+        [255, 85, 255],
+        [85, 255, 255],
+        [255, 255, 255],
+    ],
+};
 
 const TANGO: [Rgb; 16] = [
     [46, 52, 54],
@@ -132,34 +213,9 @@ const SOLARIZED: [Rgb; 16] = [
 /// Colour scheme presets offered on the Colours page. The first entry is
 /// the default.
 pub const SCHEMES: &[(&str, Colours)] = &[
-    (
-        "PuTTY (classic)",
-        Colours {
-            foreground: [187, 187, 187],
-            bold_foreground: [255, 255, 255],
-            background: [0, 0, 0],
-            cursor_text: [0, 0, 0],
-            cursor: [0, 255, 0],
-            ansi: [
-                [0, 0, 0],
-                [187, 0, 0],
-                [0, 187, 0],
-                [187, 187, 0],
-                [0, 0, 187],
-                [187, 0, 187],
-                [0, 187, 187],
-                [187, 187, 187],
-                [85, 85, 85],
-                [255, 85, 85],
-                [85, 255, 85],
-                [255, 255, 85],
-                [85, 85, 255],
-                [255, 85, 255],
-                [85, 255, 255],
-                [255, 255, 255],
-            ],
-        },
-    ),
+    ("Moriartty Dark", MORIARTTY_DARK),
+    ("Moriartty Light", MORIARTTY_LIGHT),
+    ("PuTTY (classic)", PUTTY),
     (
         "Tango Dark",
         Colours {
@@ -253,11 +309,20 @@ pub const ANSI_NAMES: [&str; 16] = [
     "ANSI White Bold",
 ];
 
+/// Format version written into saved files. Files from before 0.5 have
+/// none, which reads as 0; `Settings::migrate` brings them up to date.
+pub const CONFIG_VERSION: u32 = 2;
+
 // Unknown keys in saved files (e.g. from the earlier SSH-client draft) are
 // ignored by serde, so old saved sessions still load.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Missing in old files, so it defaults to 0 there, not to the
+    /// current version.
+    #[serde(default)]
+    pub config_version: u32,
+
     // Session
     /// Program to run; empty means the user's login shell.
     pub shell: String,
@@ -307,6 +372,9 @@ pub struct Settings {
     pub font_zoom: u32,
     pub hide_mouse: bool,
     pub window_border: u16,
+    /// Terminal background opacity in percent, 30–100. Below 100 the
+    /// desktop shows through (needs a compositor).
+    pub background_opacity: u32,
 
     // Window > Behaviour
     pub wintitle: String,
@@ -317,19 +385,27 @@ pub struct Settings {
 
     // Window > Selection
     pub mouse_action: MouseAction,
-    pub copy_on_select: bool,
+    /// Selecting text always fills PRIMARY (middle-click paste); this also
+    /// copies it to the clipboard, where clipboard managers keep it.
+    /// Replaces 0.4's `copy_on_select`, which did that by default.
+    pub copy_to_clipboard: bool,
     pub word_chars: String,
     pub paste_controls: bool,
     pub confirm_multiline_paste: bool,
 
     // Window > Colours
     pub bold_as_colour: bool,
+    /// Moriartty Dark or Light, following the desktop's style; `colours`
+    /// is used when this is off.
+    pub auto_colours: bool,
     pub colours: Colours,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            config_version: CONFIG_VERSION,
+
             shell: String::new(),
             login_shell: false,
             close_on_exit: CloseOnExit::Clean,
@@ -368,7 +444,8 @@ impl Default for Settings {
             font: "Monospace 12".into(),
             font_zoom: 100,
             hide_mouse: true,
-            window_border: 1,
+            window_border: 6,
+            background_opacity: 100,
 
             wintitle: String::new(),
             warn_on_close: true,
@@ -376,12 +453,13 @@ impl Default for Settings {
             title_buttons: true,
 
             mouse_action: MouseAction::Compromise,
-            copy_on_select: true,
+            copy_to_clipboard: false,
             word_chars: "-,./?%&#:_=+@~".into(),
             paste_controls: false,
             confirm_multiline_paste: true,
 
             bold_as_colour: true,
+            auto_colours: true,
             colours: Colours::default(),
         }
     }
@@ -400,12 +478,44 @@ pub fn next_zoom(current: u32, step: i32) -> u32 {
 }
 
 impl Settings {
+    /// Bring a file saved by an older Moriartty up to the current format.
+    /// Applied to every file loaded from disk, before `sanitize`.
+    ///
+    /// Format 1 (0.5): `copy_on_select`, which also copied selections to
+    /// the clipboard, became `copy_to_clipboard`, off by default. serde
+    /// ignores the old key, so old files get the new, private default.
+    ///
+    /// Format 2 (0.6): new look. Everyone follows the desktop's light or
+    /// dark style; the colours saved so far stay in `colours`, used again
+    /// when that is turned off. A border still at the old default (the
+    /// user never changed it) moves to the new one.
+    pub fn migrate(&mut self) {
+        if self.config_version < 2 {
+            self.auto_colours = true;
+            if self.window_border == 1 {
+                self.window_border = Settings::default().window_border;
+            }
+        }
+        self.config_version = CONFIG_VERSION;
+    }
+
+    /// The palette in use: Moriartty Dark or Light when following the
+    /// desktop (`dark` is its current style), else the configured one.
+    pub fn active_colours(&self, dark: bool) -> &Colours {
+        match (self.auto_colours, dark) {
+            (true, true) => &MORIARTTY_DARK,
+            (true, false) => &MORIARTTY_LIGHT,
+            (false, _) => &self.colours,
+        }
+    }
+
     /// Clamp numbers into sane ranges. Applied to every file loaded from disk.
     pub fn sanitize(&mut self) {
         self.columns = self.columns.clamp(1, 1000);
         self.rows = self.rows.clamp(1, 500);
         self.scrollback = self.scrollback.min(1_000_000);
         self.window_border = self.window_border.min(64);
+        self.background_opacity = self.background_opacity.clamp(30, 100);
         self.font_zoom = self.font_zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
         self.bell_overload_n = self.bell_overload_n.clamp(1, 1000);
         self.bell_overload_t = self.bell_overload_t.clamp(1, 3600);
@@ -504,7 +614,51 @@ mod tests {
             toml::from_str("host = \"example.com\"\nport = 2222\nprotocol = \"ssh\"\ncolumns = 100\n")
                 .unwrap();
         assert_eq!(s.columns, 100);
-        assert!(s.copy_on_select);
         assert_eq!(s.mouse_action, MouseAction::Compromise);
+    }
+
+    #[test]
+    fn old_files_are_migrated() {
+        let mut s: Settings = toml::from_str("copy_on_select = true\ncolumns = 100\n").unwrap();
+        assert_eq!(s.config_version, 0);
+        assert!(!s.copy_to_clipboard);
+        s.migrate();
+        assert_eq!(s.config_version, CONFIG_VERSION);
+        assert_eq!(s.columns, 100);
+    }
+
+    #[test]
+    fn untouched_old_defaults_get_the_new_look() {
+        let mut s = Settings { config_version: 1, colours: PUTTY, window_border: 1, ..Settings::default() };
+        s.migrate();
+        assert!(s.auto_colours);
+        assert_eq!(s.window_border, 6);
+
+        let dracula = SCHEMES.iter().find(|(n, _)| *n == "Dracula").unwrap().1.clone();
+        let mut s = Settings {
+            config_version: 1,
+            auto_colours: false,
+            colours: dracula.clone(),
+            window_border: 0,
+            ..Settings::default()
+        };
+        s.migrate();
+        assert!(s.auto_colours);
+        assert_eq!(s.colours, dracula);
+        assert_eq!(s.window_border, 0);
+
+        // Current files are left alone.
+        let mut s = Settings { auto_colours: false, colours: PUTTY, ..Settings::default() };
+        s.migrate();
+        assert!(!s.auto_colours);
+    }
+
+    #[test]
+    fn auto_colours_follow_the_desktop() {
+        let s = Settings::default();
+        assert_eq!(*s.active_colours(true), MORIARTTY_DARK);
+        assert_eq!(*s.active_colours(false), MORIARTTY_LIGHT);
+        let s = Settings { auto_colours: false, colours: PUTTY, ..Settings::default() };
+        assert_eq!(*s.active_colours(false), PUTTY);
     }
 }
