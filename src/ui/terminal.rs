@@ -136,6 +136,9 @@ fn url_regex() -> Result<vte::Regex, String> {
     })
 }
 
+/// Run when a tab's terminal area gets a new size (set once the tab exists).
+type AllocateHook = Rc<RefCell<Option<Box<dyn Fn()>>>>;
+
 /// CSS class of the widgets between the window and a terminal, which are
 /// cleared when the background opacity is below 100.
 const CLEAR_CLASS: &str = "moriartty-clear";
@@ -1219,7 +1222,7 @@ impl Tab {
         // out right after, so the check runs once GTK has finished the layout
         // pass. Font and zoom changes call check_size() directly, and so does
         // switching to the tab.
-        let on_allocate: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::default();
+        let on_allocate: AllocateHook = Rc::default();
         let size_probe = gtk::DrawingArea::new();
         size_probe.set_can_target(false);
         size_probe.set_hexpand(true);

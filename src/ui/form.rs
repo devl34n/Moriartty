@@ -12,6 +12,7 @@ use crate::config::{Choice, Rgb, Settings};
 
 pub type Shared = Rc<RefCell<Settings>>;
 type Refresher = Box<dyn Fn(&Settings)>;
+type Callback = Box<dyn Fn()>;
 
 #[derive(Clone)]
 pub struct Form {
@@ -26,7 +27,7 @@ pub struct Form {
 /// once at the end.
 #[derive(Clone)]
 struct Changed {
-    callbacks: Rc<RefCell<Vec<Box<dyn Fn()>>>>,
+    callbacks: Rc<RefCell<Vec<Callback>>>,
     refreshing: Rc<Cell<bool>>,
 }
 
@@ -168,7 +169,7 @@ impl Form {
         labelled(parent, label, &e, true);
         let (s, changed) = (self.s.clone(), self.changed.clone());
         e.connect_changed(move |e| {
-            set(&mut *s.borrow_mut(), e.text().to_string());
+            set(&mut s.borrow_mut(), e.text().to_string());
             changed.fire();
         });
         let e2 = e.clone();
@@ -192,7 +193,7 @@ impl Form {
         parent.append(&c);
         let (s, changed) = (self.s.clone(), self.changed.clone());
         c.connect_toggled(move |c| {
-            set(&mut *s.borrow_mut(), c.is_active());
+            set(&mut s.borrow_mut(), c.is_active());
             changed.fire();
         });
         let c2 = c.clone();
@@ -220,7 +221,7 @@ impl Form {
         let (s, changed) = (self.s.clone(), self.changed.clone());
         sp.connect_value_changed(move |sp| {
             let v = sp.value().round().clamp(f64::from(min), f64::from(max)) as u32;
-            set(&mut *s.borrow_mut(), v);
+            set(&mut s.borrow_mut(), v);
             changed.fire();
         });
         let sp2 = sp.clone();
@@ -250,7 +251,7 @@ impl Form {
                 return;
             }
             if let Some(v) = T::all().get(dd.selected() as usize) {
-                set(&mut *s.borrow_mut(), *v);
+                set(&mut s.borrow_mut(), *v);
                 changed.fire();
             }
         });
@@ -280,7 +281,7 @@ impl Form {
         b.connect_rgba_notify(move |b| {
             let c = b.rgba();
             set(
-                &mut *s.borrow_mut(),
+                &mut s.borrow_mut(),
                 [to8(c.red()), to8(c.green()), to8(c.blue())],
             );
             changed.fire();
@@ -301,7 +302,7 @@ impl Form {
         let (s, changed) = (self.s.clone(), self.changed.clone());
         b.connect_font_desc_notify(move |b| {
             if let Some(d) = b.font_desc() {
-                set(&mut *s.borrow_mut(), d.to_str().to_string());
+                set(&mut s.borrow_mut(), d.to_str().to_string());
                 changed.fire();
             }
         });

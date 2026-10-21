@@ -9,6 +9,9 @@ use super::form::{group, note, page, Form};
 use crate::config::*;
 use crate::{storage, ui};
 
+/// Shows settings in the terminal without applying them.
+pub type Preview = Rc<dyn Fn(&Settings)>;
+
 pub enum Mode {
     New,
     /// Changing an open terminal window. `preview` shows the look of the
@@ -16,7 +19,7 @@ pub enum Mode {
     /// dialog without applying previews the original settings again.
     Reconfigure {
         apply: Rc<dyn Fn(Settings)>,
-        preview: Rc<dyn Fn(&Settings)>,
+        preview: Preview,
     },
 }
 
@@ -90,7 +93,7 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
     }
     // Live preview in the terminal, when there is one (Reconfigure): every
     // change in the form, a picked colour scheme included, shows at once.
-    let preview: Option<Rc<dyn Fn(&Settings)>> = match &mode {
+    let preview: Option<Preview> = match &mode {
         Mode::Reconfigure { preview, .. } => Some(preview.clone()),
         Mode::New => None,
     };

@@ -61,7 +61,9 @@ fn read_text(clip: &gdk::Clipboard) -> Option<String> {
     let slot: Rc<RefCell<Option<Option<String>>>> = Rc::default();
     let s = slot.clone();
     let fut = clip.read_text_future();
-    let _ = glib::MainContext::default().spawn_local(async move {
+    // Kept in a variable until the end: the task runs on the main loop that
+    // pump() turns, and its result arrives through `slot`.
+    let _task = glib::MainContext::default().spawn_local(async move {
         let text = fut.await.ok().flatten().map(|t| t.to_string());
         *s.borrow_mut() = Some(text);
     });

@@ -63,7 +63,7 @@ pub fn open_log(path: &Path, append: bool) -> io::Result<File> {
         .open(path)?;
     let m = f.metadata()?;
     if !m.is_file() {
-        return Err(io::Error::new(io::ErrorKind::Other, "not a regular file"));
+        return Err(io::Error::other("not a regular file"));
     }
     if m.uid() != nix::unistd::getuid().as_raw() {
         return Err(io::Error::new(

@@ -13,9 +13,11 @@ export DEBIAN_FRONTEND=noninteractive
 # do: the package is still built against Debian 13's GTK and VTE, so it
 # installs on Debian 13 and newer. Other images (e.g. Ubuntu 26.04) use
 # their own Rust.
-. /etc/os-release
+# Read in a subshell: /etc/os-release also sets NAME, which would replace
+# this script's NAME=moriartty.
+CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
 RUST_FROM=()
-if [[ "${VERSION_CODENAME:-}" == trixie ]]; then
+if [[ "$CODENAME" == trixie ]]; then
     echo "deb http://deb.debian.org/debian trixie-backports main" \
         > /etc/apt/sources.list.d/trixie-backports.list
     RUST_FROM=(-t trixie-backports)
