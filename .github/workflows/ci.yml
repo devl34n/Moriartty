@@ -45,7 +45,7 @@ jobs:
             -t trixie-backports cargo rustc
 
       # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -89,7 +89,7 @@ jobs:
         run: dnf install -y --setopt=install_weak_deps=False rustup gcc gtk4-devel vte291-gtk4-devel git
 
       # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -110,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
