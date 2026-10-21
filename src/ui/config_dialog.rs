@@ -1,7 +1,6 @@
 //! The PuTTY/pterm-style settings window: category tree on the left, option
 //! pages on the right, saved sessions on the Session page.
 
-use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -25,10 +24,6 @@ struct Ctx {
     window: gtk::ApplicationWindow,
     open: Rc<dyn Fn()>,
     reconfig: bool,
-    /// Shows settings in the terminal without changing the form (Try).
-    preview: Option<Rc<dyn Fn(&Settings)>>,
-    /// The scheme last shown with Try; Apply keeps it.
-    tried: Rc<Cell<Option<usize>>>,
 }
 
 type Builder = fn(&Form, &Ctx) -> gtk::Box;
@@ -52,7 +47,11 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .icon_name(crate::APP_ID)
-        .title(if reconfig { "Moriartty Reconfiguration" } else { "Moriartty Configuration" })
+        .title(if reconfig {
+            "Moriartty Reconfiguration"
+        } else {
+            "Moriartty Configuration"
+        })
         .default_width(780)
         .default_height(620)
         .build();
@@ -89,18 +88,15 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
             form.clear();
         });
     }
-    // Live preview in the terminal, when there is one (Reconfigure).
+    // Live preview in the terminal, when there is one (Reconfigure): every
+    // change in the form, a picked colour scheme included, shows at once.
     let preview: Option<Rc<dyn Fn(&Settings)>> = match &mode {
         Mode::Reconfigure { preview, .. } => Some(preview.clone()),
         Mode::New => None,
     };
-    // A scheme shown with Try is not part of the form until Apply; any
-    // change made in the form itself drops it.
-    let tried: Rc<Cell<Option<usize>>> = Rc::default();
     {
-        let (preview, s, tried) = (preview.clone(), form.s.clone(), tried.clone());
+        let (preview, s) = (preview.clone(), form.s.clone());
         form.on_change(move || {
-            tried.set(None);
             if let Some(preview) = &preview {
                 ui::debug("settings: preview");
                 preview(&s.borrow());
@@ -122,13 +118,9 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
         let app = app.clone();
         let save_default = save_default.clone();
         let applied = applied.clone();
-        let tried = tried.clone();
         Rc::new(move || {
             ui::debug("settings: apply");
             let mut s = form.get();
-            if let Some((_, colours)) = tried.get().and_then(|i| SCHEMES.get(i)) {
-                s.colours = colours.clone();
-            }
             s.sanitize();
             if let Err(e) = s.validate() {
                 ui::debug(format!("settings: invalid: {e}"));
@@ -167,8 +159,6 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
         window: window.clone(),
         open: open.clone(),
         reconfig,
-        preview,
-        tried,
     };
 
     let stack = gtk::Stack::new();
@@ -293,9 +283,19 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
     let p = page("Basic options for your Moriartty session");
 
     let g = group(&p, "Program to run");
-    f.entry(&g, "Shell (blank = your login shell)", |s| s.shell.clone(), |s, v| s.shell = v)
-        .set_placeholder_text(Some("e.g. /usr/bin/zsh"));
-    f.check(&g, "Run as a login shell", |s| s.login_shell, |s, v| s.login_shell = v);
+    f.entry(
+        &g,
+        "Shell (blank = your login shell)",
+        |s| s.shell.clone(),
+        |s, v| s.shell = v,
+    )
+    .set_placeholder_text(Some("e.g. /usr/bin/zsh"));
+    f.check(
+        &g,
+        "Run as a login shell",
+        |s| s.login_shell,
+        |s, v| s.login_shell = v,
+    );
 
     let g = group(&p, "Load, save or delete a stored session");
     note(&g, "\"Default Settings\" is used for every new window.");
@@ -354,7 +354,11 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
         save.connect_clicked(move |_| {
             let n = name.text().trim().to_string();
             if n.is_empty() {
-                ui::message(&w, "Enter a session name first", "Type a name in the Saved Sessions box.");
+                ui::message(
+                    &w,
+                    "Enter a session name first",
+                    "Type a name in the Saved Sessions box.",
+                );
                 return;
             }
             let mut s = f.get();
@@ -386,11 +390,19 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
         });
     }
     if c.reconfig {
-        note(&g, "Changes to the shell take effect when the shell is restarted.");
+        note(
+            &g,
+            "Changes to the shell take effect when the shell is restarted.",
+        );
     }
 
     let g = group(&p, "");
-    f.choice(&g, "Close window on exit", |s| s.close_on_exit, |s, v| s.close_on_exit = v);
+    f.choice(
+        &g,
+        "Close window on exit",
+        |s| s.close_on_exit,
+        |s, v| s.close_on_exit = v,
+    );
     p
 }
 
@@ -398,16 +410,36 @@ fn logging_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling session logging");
     let g = group(&p, "Session logging");
     f.choice(&g, "Session logging", |s| s.log_type, |s, v| s.log_type = v);
-    f.entry(&g, "Log file name", |s| s.log_file.clone(), |s, v| s.log_file = v);
+    f.entry(
+        &g,
+        "Log file name",
+        |s| s.log_file.clone(),
+        |s, v| s.log_file = v,
+    );
     note(
         &g,
         "&Y year, &M month, &D day, &T time, && a literal &. \
          Log files are created with mode 0600 and symlinks are refused. \
          Logs can contain anything shown on screen — treat them as secrets.",
     );
-    f.choice(&g, "What to do if the log file already exists", |s| s.log_exists, |s, v| s.log_exists = v);
-    f.check(&g, "Flush log file frequently", |s| s.log_flush, |s, v| s.log_flush = v);
-    f.check(&g, "Include header", |s| s.log_header, |s, v| s.log_header = v);
+    f.choice(
+        &g,
+        "What to do if the log file already exists",
+        |s| s.log_exists,
+        |s, v| s.log_exists = v,
+    );
+    f.check(
+        &g,
+        "Flush log file frequently",
+        |s| s.log_flush,
+        |s, v| s.log_flush = v,
+    );
+    f.check(
+        &g,
+        "Include header",
+        |s| s.log_header,
+        |s, v| s.log_header = v,
+    );
     p
 }
 
@@ -416,16 +448,36 @@ fn logging_page(f: &Form, _c: &Ctx) -> gtk::Box {
 fn terminal_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling the terminal emulation");
     let g = group(&p, "Set various terminal options");
-    f.entry(&g, "Terminal type ($TERM)", |s| s.term_type.clone(), |s, v| s.term_type = v);
-    f.check(&g, "Enable blinking text", |s| s.blink_text, |s, v| s.blink_text = v);
-    f.check(&g, "Treat CJK ambiguous characters as wide", |s| s.cjk_ambig_wide, |s, v| s.cjk_ambig_wide = v);
+    f.entry(
+        &g,
+        "Terminal type ($TERM)",
+        |s| s.term_type.clone(),
+        |s, v| s.term_type = v,
+    );
+    f.check(
+        &g,
+        "Enable blinking text",
+        |s| s.blink_text,
+        |s, v| s.blink_text = v,
+    );
+    f.check(
+        &g,
+        "Treat CJK ambiguous characters as wide",
+        |s| s.cjk_ambig_wide,
+        |s, v| s.cjk_ambig_wide = v,
+    );
     p
 }
 
 fn keyboard_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling the effects of keys");
     let g = group(&p, "Change the sequences sent by");
-    f.choice(&g, "The Backspace key", |s| s.backspace, |s, v| s.backspace = v);
+    f.choice(
+        &g,
+        "The Backspace key",
+        |s| s.backspace,
+        |s, v| s.backspace = v,
+    );
     note(
         &g,
         "Shortcuts: Ctrl+Shift+C / Ctrl+Insert copy, Ctrl+Shift+V / Shift+Insert paste, \
@@ -440,21 +492,67 @@ fn keyboard_page(f: &Form, _c: &Ctx) -> gtk::Box {
 fn bell_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling the terminal bell");
     let g = group(&p, "Set the style of bell");
-    f.choice(&g, "Action to happen when a bell occurs", |s| s.bell, |s, v| s.bell = v);
+    f.choice(
+        &g,
+        "Action to happen when a bell occurs",
+        |s| s.bell,
+        |s, v| s.bell = v,
+    );
     let g = group(&p, "Control the bell overload behaviour");
-    f.check(&g, "Bell is temporarily disabled when over-used", |s| s.bell_overload, |s, v| s.bell_overload = v);
-    f.number(&g, "Over-use means this many bells…", 1, 1000, |s| s.bell_overload_n, |s, v| s.bell_overload_n = v);
-    f.number(&g, "…in this many seconds", 1, 3600, |s| s.bell_overload_t, |s, v| s.bell_overload_t = v);
-    f.number(&g, "Seconds of silence required", 1, 3600, |s| s.bell_overload_s, |s, v| s.bell_overload_s = v);
+    f.check(
+        &g,
+        "Bell is temporarily disabled when over-used",
+        |s| s.bell_overload,
+        |s, v| s.bell_overload = v,
+    );
+    f.number(
+        &g,
+        "Over-use means this many bells…",
+        1,
+        1000,
+        |s| s.bell_overload_n,
+        |s, v| s.bell_overload_n = v,
+    );
+    f.number(
+        &g,
+        "…in this many seconds",
+        1,
+        3600,
+        |s| s.bell_overload_t,
+        |s, v| s.bell_overload_t = v,
+    );
+    f.number(
+        &g,
+        "Seconds of silence required",
+        1,
+        3600,
+        |s| s.bell_overload_s,
+        |s, v| s.bell_overload_s = v,
+    );
     p
 }
 
 fn features_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Enabling and disabling advanced terminal features");
     let g = group(&p, "Enable/disable advanced terminal features");
-    f.check(&g, "Disable remote-controlled window title changing", |s| s.no_remote_wintitle, |s, v| s.no_remote_wintitle = v);
-    f.check(&g, "Ctrl+click opens web links (http/https only)", |s| s.clickable_urls, |s, v| s.clickable_urls = v);
-    f.check(&g, "Allow clickable hyperlinks (OSC 8)", |s| s.allow_hyperlinks, |s, v| s.allow_hyperlinks = v);
+    f.check(
+        &g,
+        "Disable remote-controlled window title changing",
+        |s| s.no_remote_wintitle,
+        |s, v| s.no_remote_wintitle = v,
+    );
+    f.check(
+        &g,
+        "Ctrl+click opens web links (http/https only)",
+        |s| s.clickable_urls,
+        |s, v| s.clickable_urls = v,
+    );
+    f.check(
+        &g,
+        "Allow clickable hyperlinks (OSC 8)",
+        |s| s.allow_hyperlinks,
+        |s, v| s.allow_hyperlinks = v,
+    );
     note(
         &g,
         "Always disabled for safety: answerback (^E), window title reporting and \
@@ -468,13 +566,49 @@ fn features_page(f: &Form, _c: &Ctx) -> gtk::Box {
 fn window_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling Moriartty's window");
     let g = group(&p, "Set the size of the window");
-    f.number(&g, "Columns", 1, 1000, |s| u32::from(s.columns), |s, v| s.columns = v as u16);
-    f.number(&g, "Rows", 1, 500, |s| u32::from(s.rows), |s, v| s.rows = v as u16);
+    f.number(
+        &g,
+        "Columns",
+        1,
+        1000,
+        |s| u32::from(s.columns),
+        |s, v| s.columns = v as u16,
+    );
+    f.number(
+        &g,
+        "Rows",
+        1,
+        500,
+        |s| u32::from(s.rows),
+        |s, v| s.rows = v as u16,
+    );
     let g = group(&p, "Control the scrollback in the window");
-    f.number(&g, "Lines of scrollback", 0, 1_000_000, |s| s.scrollback, |s, v| s.scrollback = v);
-    f.check(&g, "Display scrollbar", |s| s.scrollbar, |s, v| s.scrollbar = v);
-    f.check(&g, "Reset scrollback on keypress", |s| s.scroll_on_key, |s, v| s.scroll_on_key = v);
-    f.check(&g, "Reset scrollback on display activity", |s| s.scroll_on_output, |s, v| s.scroll_on_output = v);
+    f.number(
+        &g,
+        "Lines of scrollback",
+        0,
+        1_000_000,
+        |s| s.scrollback,
+        |s, v| s.scrollback = v,
+    );
+    f.check(
+        &g,
+        "Display scrollbar",
+        |s| s.scrollbar,
+        |s, v| s.scrollbar = v,
+    );
+    f.check(
+        &g,
+        "Reset scrollback on keypress",
+        |s| s.scroll_on_key,
+        |s, v| s.scroll_on_key = v,
+    );
+    f.check(
+        &g,
+        "Reset scrollback on display activity",
+        |s| s.scroll_on_output,
+        |s, v| s.scroll_on_output = v,
+    );
     p
 }
 
@@ -482,38 +616,113 @@ fn appearance_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Configure the appearance of Moriartty's window");
     let g = group(&p, "Adjust the use of the cursor");
     f.choice(&g, "Cursor appearance", |s| s.cursor, |s, v| s.cursor = v);
-    f.check(&g, "Cursor blinks", |s| s.cursor_blink, |s, v| s.cursor_blink = v);
+    f.check(
+        &g,
+        "Cursor blinks",
+        |s| s.cursor_blink,
+        |s, v| s.cursor_blink = v,
+    );
     let g = group(&p, "Font settings");
-    f.font(&g, "Font used in the terminal window", |s| s.font.clone(), |s, v| s.font = v);
-    f.number(&g, "Zoom (%) — also Ctrl+= / Ctrl+- / Ctrl+0", 30, 400, |s| s.font_zoom, |s, v| s.font_zoom = v);
+    f.font(
+        &g,
+        "Font used in the terminal window",
+        |s| s.font.clone(),
+        |s, v| s.font = v,
+    );
+    f.number(
+        &g,
+        "Zoom (%) — also Ctrl+= / Ctrl+- / Ctrl+0",
+        30,
+        400,
+        |s| s.font_zoom,
+        |s, v| s.font_zoom = v,
+    );
     let g = group(&p, "Adjust the use of the mouse pointer");
-    f.check(&g, "Hide mouse pointer when typing in window", |s| s.hide_mouse, |s, v| s.hide_mouse = v);
+    f.check(
+        &g,
+        "Hide mouse pointer when typing in window",
+        |s| s.hide_mouse,
+        |s, v| s.hide_mouse = v,
+    );
     let g = group(&p, "Adjust the window border");
-    f.number(&g, "Gap between text and window edge", 0, 64, |s| u32::from(s.window_border), |s, v| s.window_border = v as u16);
+    f.number(
+        &g,
+        "Gap between text and window edge",
+        0,
+        64,
+        |s| u32::from(s.window_border),
+        |s, v| s.window_border = v as u16,
+    );
     let g = group(&p, "Background");
-    f.number(&g, "Background opacity (%)", 30, 100, |s| s.background_opacity, |s, v| s.background_opacity = v);
-    note(&g, "Below 100 the desktop shows through the terminal. This needs a compositing desktop.");
+    f.number(
+        &g,
+        "Background opacity (%)",
+        30,
+        100,
+        |s| s.background_opacity,
+        |s, v| s.background_opacity = v,
+    );
+    note(
+        &g,
+        "Below 100 the desktop shows through the terminal. This needs a compositing desktop.",
+    );
     p
 }
 
 fn behaviour_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Configure the behaviour of Moriartty's window");
     let g = group(&p, "");
-    f.entry(&g, "Window title", |s| s.wintitle.clone(), |s, v| s.wintitle = v);
-    f.check(&g, "Warn before closing a window with a running program", |s| s.warn_on_close, |s, v| s.warn_on_close = v);
-    f.check(&g, "Full screen on Alt-Enter", |s| s.fullscreen_on_alt_enter, |s, v| s.fullscreen_on_alt_enter = v);
-    f.check(&g, "Show settings and menu buttons in the title bar", |s| s.title_buttons, |s, v| s.title_buttons = v);
-    note(&g, "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.");
+    f.entry(
+        &g,
+        "Window title",
+        |s| s.wintitle.clone(),
+        |s, v| s.wintitle = v,
+    );
+    f.check(
+        &g,
+        "Warn before closing a window with a running program",
+        |s| s.warn_on_close,
+        |s, v| s.warn_on_close = v,
+    );
+    f.check(
+        &g,
+        "Full screen on Alt-Enter",
+        |s| s.fullscreen_on_alt_enter,
+        |s, v| s.fullscreen_on_alt_enter = v,
+    );
+    f.check(
+        &g,
+        "Show settings and menu buttons in the title bar",
+        |s| s.title_buttons,
+        |s, v| s.title_buttons = v,
+    );
+    note(
+        &g,
+        "Without the buttons, use Ctrl+Right-click for the menu and Ctrl+Shift+P for settings.",
+    );
     p
 }
 
 fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling copy and paste");
     let g = group(&p, "Control use of mouse");
-    f.choice(&g, "Action of mouse buttons", |s| s.mouse_action, |s, v| s.mouse_action = v);
-    note(&g, "Ctrl+Right-click always opens the menu. Hold Shift to send clicks to the application.");
+    f.choice(
+        &g,
+        "Action of mouse buttons",
+        |s| s.mouse_action,
+        |s, v| s.mouse_action = v,
+    );
+    note(
+        &g,
+        "Ctrl+Right-click always opens the menu. Hold Shift to send clicks to the application.",
+    );
     let g = group(&p, "Copy and paste");
-    f.check(&g, "Also copy selected text to the clipboard", |s| s.copy_to_clipboard, |s, v| s.copy_to_clipboard = v);
+    f.check(
+        &g,
+        "Also copy selected text to the clipboard",
+        |s| s.copy_to_clipboard,
+        |s, v| s.copy_to_clipboard = v,
+    );
     note(
         &g,
         "Selected text always goes to the PRIMARY selection, which Middle-click \
@@ -521,9 +730,24 @@ fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
          copies it to the clipboard. Clipboard managers keep whatever reaches the \
          clipboard, so copying every selection there is off by default.",
     );
-    f.entry(&g, "Extra characters treated as part of a word", |s| s.word_chars.clone(), |s, v| s.word_chars = v);
-    f.check(&g, "Ask before pasting several lines or hidden characters", |s| s.confirm_multiline_paste, |s, v| s.confirm_multiline_paste = v);
-    f.check(&g, "Permit control characters in pasted text (unsafe)", |s| s.paste_controls, |s, v| s.paste_controls = v);
+    f.entry(
+        &g,
+        "Extra characters treated as part of a word",
+        |s| s.word_chars.clone(),
+        |s, v| s.word_chars = v,
+    );
+    f.check(
+        &g,
+        "Ask before pasting several lines or hidden characters",
+        |s| s.confirm_multiline_paste,
+        |s, v| s.confirm_multiline_paste = v,
+    );
+    f.check(
+        &g,
+        "Permit control characters in pasted text (unsafe)",
+        |s| s.paste_controls,
+        |s, v| s.paste_controls = v,
+    );
     note(
         &g,
         "Pasted text is normally stripped of escape sequences and other control \
@@ -532,7 +756,7 @@ fn selection_page(f: &Form, _c: &Ctx) -> gtk::Box {
     p
 }
 
-fn colours_page(f: &Form, c: &Ctx) -> gtk::Box {
+fn colours_page(f: &Form, _c: &Ctx) -> gtk::Box {
     let p = page("Options controlling use of colours");
 
     let g = group(&p, "Colour scheme");
@@ -543,48 +767,86 @@ fn colours_page(f: &Form, c: &Ctx) -> gtk::Box {
         |s, v| s.auto_colours = v,
     );
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&gtk::Label::new(Some("Scheme")));
     let names: Vec<&str> = SCHEMES.iter().map(|(n, _)| *n).collect();
     let schemes = gtk::DropDown::from_strings(&names);
     schemes.set_hexpand(true);
-    if let Some(i) = SCHEMES.iter().position(|(_, cols)| *cols == f.s.borrow().colours) {
+    if let Some(i) = SCHEMES
+        .iter()
+        .position(|(_, cols)| *cols == f.s.borrow().colours)
+    {
         schemes.set_selected(i as u32);
     }
-    let try_btn = gtk::Button::with_label("Try");
-    try_btn.set_tooltip_text(Some("Show this scheme in the terminal without changing anything. Apply keeps it."));
+    // Picking a scheme puts its colours into the settings at once: the
+    // terminal shows them, Apply keeps them, Cancel goes back. (Connected
+    // after the initial selection above, so opening the window changes
+    // nothing.)
     {
-        let (f, schemes, preview, tried) = (f.clone(), schemes.clone(), c.preview.clone(), c.tried.clone());
-        try_btn.connect_clicked(move |_| {
-            let i = schemes.selected() as usize;
-            let Some((name, colours)) = SCHEMES.get(i) else { return };
-            ui::debug(format!("settings: try {name}"));
-            tried.set(Some(i));
-            if let Some(preview) = &preview {
-                let mut s = f.get();
-                s.colours = colours.clone();
-                preview(&s);
-            }
+        let f = f.clone();
+        schemes.connect_selected_notify(move |dd| {
+            let Some((name, colours)) = SCHEMES.get(dd.selected() as usize) else {
+                return;
+            };
+            ui::debug(format!("settings: scheme {name}"));
+            // The borrow ends before refresh(), whose widgets write back
+            // into the settings.
+            f.s.borrow_mut().colours = colours.clone();
+            f.refresh();
         });
     }
     row.append(&schemes);
-    row.append(&try_btn);
     g.append(&row);
     note(
         &g,
-        "Try shows a scheme in the terminal without changing anything here. Apply keeps \
-         the scheme you tried last and closes this window; Cancel goes back to what you \
-         had. Changing a colour below works on your own colours instead.",
+        "A scheme sets all the colours below, and the terminal shows it at once. Apply \
+         keeps it; Cancel goes back to what you had. You can then change single colours.",
     );
 
     let g = group(&p, "General options for colour usage");
-    f.check(&g, "Show bold text in a brighter colour", |s| s.bold_as_colour, |s, v| s.bold_as_colour = v);
+    f.check(
+        &g,
+        "Show bold text in a brighter colour",
+        |s| s.bold_as_colour,
+        |s, v| s.bold_as_colour = v,
+    );
     let pickers = group(&p, "Adjust the precise colours Moriartty displays");
-    f.colour(&pickers, "Default Foreground", |s| s.colours.foreground, |s, v| s.colours.foreground = v);
-    f.colour(&pickers, "Default Bold Foreground", |s| s.colours.bold_foreground, |s, v| s.colours.bold_foreground = v);
-    f.colour(&pickers, "Default Background", |s| s.colours.background, |s, v| s.colours.background = v);
-    f.colour(&pickers, "Cursor Text", |s| s.colours.cursor_text, |s, v| s.colours.cursor_text = v);
-    f.colour(&pickers, "Cursor Colour", |s| s.colours.cursor, |s, v| s.colours.cursor = v);
+    f.colour(
+        &pickers,
+        "Default Foreground",
+        |s| s.colours.foreground,
+        |s, v| s.colours.foreground = v,
+    );
+    f.colour(
+        &pickers,
+        "Default Bold Foreground",
+        |s| s.colours.bold_foreground,
+        |s, v| s.colours.bold_foreground = v,
+    );
+    f.colour(
+        &pickers,
+        "Default Background",
+        |s| s.colours.background,
+        |s, v| s.colours.background = v,
+    );
+    f.colour(
+        &pickers,
+        "Cursor Text",
+        |s| s.colours.cursor_text,
+        |s, v| s.colours.cursor_text = v,
+    );
+    f.colour(
+        &pickers,
+        "Cursor Colour",
+        |s| s.colours.cursor,
+        |s, v| s.colours.cursor = v,
+    );
     for (i, name) in ANSI_NAMES.iter().enumerate() {
-        f.colour(&pickers, name, move |s| s.colours.ansi[i], move |s, v| s.colours.ansi[i] = v);
+        f.colour(
+            &pickers,
+            name,
+            move |s| s.colours.ansi[i],
+            move |s, v| s.colours.ansi[i] = v,
+        );
     }
 
     // Picking colours by hand only applies when not following the desktop.

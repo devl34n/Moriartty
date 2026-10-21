@@ -66,7 +66,10 @@ pub fn open_log(path: &Path, append: bool) -> io::Result<File> {
         return Err(io::Error::new(io::ErrorKind::Other, "not a regular file"));
     }
     if m.uid() != nix::unistd::getuid().as_raw() {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "file is owned by another user"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file is owned by another user",
+        ));
     }
     if m.mode() & 0o077 != 0 {
         f.set_permissions(Permissions::from_mode(0o600))?;
@@ -196,5 +199,60 @@ mod tests {
         let mut out = s.filter(b"a\x1b[3");
         out.extend(s.filter(b"1mb"));
         assert_eq!(out, b"ab");
+    }
+
+    use crate::storage::test_support::{fresh_dir, mode};
+    use std::fs;
+
+    #[test]
+    fn new_logs_are_private() {
+        let d = fresh_dir("log-new");
+        let p = d.join("term.log");
+        drop(open_log(&p, false).unwrap());
+        assert_eq!(mode(&p), 0o600);
+    }
+
+    #[test]
+    fn log_symlinks_are_refused() {
+        let d = fresh_dir("log-symlink");
+        let target = d.join("target");
+        fs::write(&target, "keep").unwrap();
+        let link = d.join("term.log");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(open_log(&link, false).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
+    }
+
+    #[test]
+    fn devices_are_refused() {
+        assert!(open_log(Path::new("/dev/null"), false).is_err());
+    }
+
+    #[test]
+    fn fifos_do_not_block() {
+        let d = fresh_dir("log-fifo");
+        let p = d.join("fifo");
+        // No unsafe code outside sys.rs, so the FIFO comes from mkfifo(1).
+        let made = std::process::Command::new("mkfifo").arg(&p).status();
+        if !made.is_ok_and(|s| s.success()) {
+            return;
+        }
+        // Without a reader, opening for writing fails at once (ENXIO)
+        // instead of hanging.
+        assert!(open_log(&p, false).is_err());
+    }
+
+    #[test]
+    fn emptied_only_when_not_appending() {
+        let d = fresh_dir("log-append");
+        let p = d.join("term.log");
+        fs::write(&p, "old").unwrap();
+        let mut f = open_log(&p, true).unwrap();
+        f.write_all(b"+new").unwrap();
+        drop(f);
+        assert_eq!(fs::read_to_string(&p).unwrap(), "old+new");
+        assert_eq!(mode(&p), 0o600);
+        drop(open_log(&p, false).unwrap());
+        assert_eq!(fs::read_to_string(&p).unwrap(), "");
     }
 }

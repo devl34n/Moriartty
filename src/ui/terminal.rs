@@ -9,7 +9,7 @@
 //! while a borrow is held, because VTE can synchronously emit "commit",
 //! which re-enters `send_user`.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -86,8 +86,12 @@ pub struct Tab {
     io_src: RefCell<Option<glib::SourceId>>,
     out_src: RefCell<Option<glib::SourceId>>,
     copy_src: RefCell<Option<glib::SourceId>>,
-    /// Refreshes `auto_title` while the program runs.
+    /// A pending refresh of `auto_title`, scheduled by activity in the tab
+    /// (see `schedule_title_refresh`). None while the tab is idle.
     title_src: RefCell<Option<glib::SourceId>>,
+    /// The program has printed something (for the startup time in the
+    /// debug log).
+    first_output: Cell<bool>,
     /// The last MAX_EVENTS events.
     events: RefCell<VecDeque<String>>,
     /// The latest event and how often it has repeated since.
@@ -115,9 +119,31 @@ thread_local! {
     static PAD_CSS: RefCell<HashSet<u16>> = RefCell::new(HashSet::new());
     static CHROME_CSS_LOADED: Cell<bool> = const { Cell::new(false) };
     static NEXT_WINDOW: Cell<u32> = const { Cell::new(0) };
+    /// The URL regex, compiled once and shared by every tab.
+    static URL_REGEX: OnceCell<Result<vte::Regex, String>> = const { OnceCell::new() };
 }
 
+fn url_regex() -> Result<vte::Regex, String> {
+    URL_REGEX.with(|re| {
+        re.get_or_init(|| {
+            vte::Regex::for_match(
+                matching::URL_REGEX,
+                PCRE2_MULTILINE | PCRE2_UTF | PCRE2_CASELESS,
+            )
+            .map_err(|e| e.to_string())
+        })
+        .clone()
+    })
+}
+
+/// CSS class of the widgets between the window and a terminal, which are
+/// cleared when the background opacity is below 100.
+const CLEAR_CLASS: &str = "moriartty-clear";
 const MAX_OUTQ: usize = 16 << 20;
+/// How long after activity in a tab its "program: directory" name is read
+/// again. Long enough for a command started with Enter to have replaced
+/// the shell in the foreground.
+const TITLE_REFRESH: Duration = Duration::from_millis(400);
 const MAX_EVENTS: usize = 1000;
 /// Copy All asks first above this many lines of scrollback.
 const COPY_ALL_ASK_LINES: u64 = 1000;
@@ -192,10 +218,16 @@ fn load_chrome_css() {
     if CHROME_CSS_LOADED.with(|c| c.replace(true)) {
         return;
     }
-    let Some(display) = gdk::Display::default() else { return };
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
     let p = gtk::CssProvider::new();
     p.load_from_string(CHROME_CSS);
-    gtk::style_context_add_provider_for_display(&display, &p, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &p,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }
 
 fn build_menu() -> gio::Menu {
@@ -240,9 +272,9 @@ fn build_menu() -> gio::Menu {
 /// letter for letter, so for those the real (ASCII) host is shown as well.
 fn link_tooltip(url: &str) -> String {
     match matching::idn_ascii_host(url) {
-        Some(host) => format!(
-            "Ctrl+click to open {url}\n⚠ International address: the real host is {host}"
-        ),
+        Some(host) => {
+            format!("Ctrl+click to open {url}\n⚠ International address: the real host is {host}")
+        }
         None => format!("Ctrl+click to open {url}"),
     }
 }
@@ -293,7 +325,12 @@ fn bar_button(icon: &str, action: &str, tooltip: &str) -> gtk::Button {
     b
 }
 
-pub fn open(app: &gtk::Application, settings: Settings, command: Option<Vec<String>>, cwd: Option<PathBuf>) {
+pub fn open(
+    app: &gtk::Application,
+    settings: Settings,
+    command: Option<Vec<String>>,
+    cwd: Option<PathBuf>,
+) {
     let tw = TermWindow::new(app, settings);
     let tab = tw.add_tab(command, cwd);
     // Problems found while loading the saved settings, e.g. a broken
@@ -350,7 +387,11 @@ impl TermWindow {
         if let Some(p) = menu_btn.popover() {
             debug_menu_colours(&p, "title bar");
         }
-        let settings_btn = bar_button("preferences-system-symbolic", "win.change-settings", "Settings (Ctrl+Shift+P)");
+        let settings_btn = bar_button(
+            "preferences-system-symbolic",
+            "win.change-settings",
+            "Settings (Ctrl+Shift+P)",
+        );
         let title_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         title_buttons.append(&settings_btn);
         title_buttons.append(&menu_btn);
@@ -394,6 +435,10 @@ impl TermWindow {
         vbox.append(&search_bar);
         vbox.append(&stack);
         window.set_child(Some(&vbox));
+        // Between the window and the terminal: kept see-through when the
+        // background opacity is below 100 (see apply_window_settings).
+        vbox.add_css_class(CLEAR_CLASS);
+        stack.add_css_class(CLEAR_CLASS);
 
         let n = NEXT_WINDOW.with(|c| c.replace(c.get().wrapping_add(1)));
         let css_class = format!("moriartty-win-{n}");
@@ -450,10 +495,14 @@ impl TermWindow {
         // The title bar and the menus in the terminal's own colours, so the
         // window reads as one surface. High contrast themes keep their own.
         if style::high_contrast() {
-            super::debug(format!("{cls}: high contrast, title bar and menus keep the theme's colours"));
+            super::debug(format!(
+                "{cls}: high contrast, title bar and menus keep the theme's colours"
+            ));
         } else {
             let (bg, fg) = (css_rgb(c.background), css_rgb(c.foreground));
-            super::debug(format!("{cls}: title bar and menus: background {bg}, text {fg}"));
+            super::debug(format!(
+                "{cls}: title bar and menus: background {bg}, text {fg}"
+            ));
             css.push_str(&format!(
                 ".{cls} .moriartty-bar {{ background-color: {bg}; color: {fg}; }}\n\
                  .{cls} popover > contents, .{cls} popover > arrow {{ background-color: {bg}; color: {fg}; }}\n\
@@ -461,7 +510,20 @@ impl TermWindow {
             ));
         }
         if s.background_opacity < 100 {
-            css.push_str(&format!("window.{cls} {{ background-color: transparent; }}\n"));
+            // The window and every widget between it and the terminal must
+            // be clear, or the terminal fades into whatever the GTK theme
+            // paints there (some themes give stacks or boxes a background)
+            // instead of into the desktop. Only Moriartty's own widgets,
+            // marked CLEAR_CLASS: the title bar, menus and scrollbar keep
+            // their look.
+            css.push_str(&format!(
+                "window.{cls} {{ background-color: transparent; }}\n\
+                 .{cls} .{CLEAR_CLASS} {{ background: none; box-shadow: none; }}\n"
+            ));
+            super::debug(format!(
+                "{cls}: window background transparent (opacity {}%)",
+                s.background_opacity
+            ));
         }
         drop(s);
         self.css.load_from_string(&css);
@@ -469,7 +531,11 @@ impl TermWindow {
 
     /// Settings or the desktop's style changed: window and all its tabs.
     fn restyle(&self) {
-        super::debug(format!("{}: restyle (dark: {})", self.css_class, style::dark()));
+        super::debug(format!(
+            "{}: restyle (dark: {})",
+            self.css_class,
+            style::dark()
+        ));
         self.apply_window_settings();
         for tab in self.tabs_snapshot() {
             tab.apply_appearance();
@@ -494,7 +560,11 @@ impl TermWindow {
 
     // ------------------------------------------------------------------ tabs
 
-    fn add_tab(self: &Rc<Self>, command: Option<Vec<String>>, start_dir: Option<PathBuf>) -> Rc<Tab> {
+    fn add_tab(
+        self: &Rc<Self>,
+        command: Option<Vec<String>>,
+        start_dir: Option<PathBuf>,
+    ) -> Rc<Tab> {
         let tab = Tab::new(self, command, start_dir);
         self.tabs.borrow_mut().push(tab.clone());
         self.strip.append(&tab.header);
@@ -516,14 +586,17 @@ impl TermWindow {
             } else {
                 t.header.remove_css_class("active");
             }
-            t.header.update_state(&[gtk::accessible::State::Selected(Some(current))]);
+            t.header
+                .update_state(&[gtk::accessible::State::Selected(Some(current))]);
         }
         tab.attention.set(false);
         tab.update_label();
         self.show_tab_chrome(tab);
         let (w, t) = (Rc::downgrade(self), Rc::downgrade(tab));
         glib::idle_add_local_once(move || {
-            let (Some(win), Some(tab)) = (w.upgrade(), t.upgrade()) else { return };
+            let (Some(win), Some(tab)) = (w.upgrade(), t.upgrade()) else {
+                return;
+            };
             win.reveal_tab(&tab);
             tab.check_size();
             if win.search_bar.is_search_mode() {
@@ -611,7 +684,11 @@ impl TermWindow {
                 tabs.remove(i);
             }
             // The tab to its right takes its place, or else the one to its left.
-            i.and_then(|i| tabs.get(i).or_else(|| i.checked_sub(1).and_then(|j| tabs.get(j))).cloned())
+            i.and_then(|i| {
+                tabs.get(i)
+                    .or_else(|| i.checked_sub(1).and_then(|j| tabs.get(j)))
+                    .cloned()
+            })
         };
         self.strip.remove(&tab.header);
         self.stack.remove(&tab.page);
@@ -635,12 +712,19 @@ impl TermWindow {
             .current_tab()
             .and_then(|c| tabs.iter().position(|t| Rc::ptr_eq(t, &c)))
             .unwrap_or(0);
-        let next = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
+        let next = if forward {
+            (cur + 1) % n
+        } else {
+            (cur + n - 1) % n
+        };
         self.select_tab(&tabs[next]);
     }
 
     fn tab_index(&self, tab: &Tab) -> Option<usize> {
-        self.tabs.borrow().iter().position(|t| std::ptr::eq(Rc::as_ptr(t), tab))
+        self.tabs
+            .borrow()
+            .iter()
+            .position(|t| std::ptr::eq(Rc::as_ptr(t), tab))
     }
 
     /// Ctrl+Shift+PgUp / Ctrl+Shift+PgDn.
@@ -658,7 +742,9 @@ impl TermWindow {
     fn move_tab_to(&self, tab: &Tab, to: usize) {
         let order = {
             let mut tabs = self.tabs.borrow_mut();
-            let Some(i) = tabs.iter().position(|t| std::ptr::eq(Rc::as_ptr(t), tab)) else { return };
+            let Some(i) = tabs.iter().position(|t| std::ptr::eq(Rc::as_ptr(t), tab)) else {
+                return;
+            };
             if i == to || to >= tabs.len() {
                 return;
             }
@@ -692,7 +778,9 @@ impl TermWindow {
 
     /// Scroll the tab strip so the tab's header is fully visible.
     fn reveal_tab(&self, tab: &Tab) {
-        let Some(b) = tab.header.compute_bounds(&self.strip) else { return };
+        let Some(b) = tab.header.compute_bounds(&self.strip) else {
+            return;
+        };
         let adj = self.strip_scroll.hadjustment();
         let (x, w) = (f64::from(b.x()), f64::from(b.width()));
         if x < adj.value() {
@@ -721,7 +809,11 @@ impl TermWindow {
             }
         } else if ctrl && shift && !alt && k == gdk::Key::n {
             self.new_window();
-        } else if ctrl && !alt && many_tabs && (key == gdk::Key::Page_Up || key == gdk::Key::Page_Down) {
+        } else if ctrl
+            && !alt
+            && many_tabs
+            && (key == gdk::Key::Page_Up || key == gdk::Key::Page_Down)
+        {
             let forward = key == gdk::Key::Page_Down;
             if shift {
                 if let Some(tab) = self.current_tab() {
@@ -730,7 +822,11 @@ impl TermWindow {
             } else {
                 self.cycle_tab(forward);
             }
-        } else if ctrl && !alt && many_tabs && (key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab) {
+        } else if ctrl
+            && !alt
+            && many_tabs
+            && (key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab)
+        {
             self.cycle_tab(!shift);
         } else if let Some(tab) = alt_digit(key, ctrl, shift, alt)
             .filter(|_| many_tabs)
@@ -769,14 +865,25 @@ impl TermWindow {
                 let detail = if tabs.len() == 1 {
                     "A program is still running in it and will be terminated.".to_string()
                 } else if busy == 1 {
-                    "A program is still running in one of its tabs and will be terminated.".to_string()
+                    "A program is still running in one of its tabs and will be terminated."
+                        .to_string()
                 } else {
-                    format!("Programs are still running in {busy} of its tabs and will be terminated.")
+                    format!(
+                        "Programs are still running in {busy} of its tabs and will be terminated."
+                    )
                 };
                 let tw2 = tw.clone();
                 let win = win.clone();
                 glib::spawn_future_local(async move {
-                    let r = ask(&win, "Close this window?", &detail, &["Cancel", "Close"], 0, 1).await;
+                    let r = ask(
+                        &win,
+                        "Close this window?",
+                        &detail,
+                        &["Cancel", "Close"],
+                        0,
+                        1,
+                    )
+                    .await;
                     if r == 1 {
                         tw2.force_close.set(true);
                         win.close();
@@ -852,15 +959,18 @@ impl TermWindow {
         });
         // Closing the bar (Escape or ×) clears the highlight and returns focus.
         let w = Rc::downgrade(self);
-        self.search_bar.connect_search_mode_enabled_notify(move |bar| {
-            if bar.is_search_mode() {
-                return;
-            }
-            let Some(tab) = w.upgrade().and_then(|tw| tw.current_tab()) else { return };
-            tab.term.search_set_regex(None, 0);
-            tab.term.unselect_all();
-            tab.term.grab_focus();
-        });
+        self.search_bar
+            .connect_search_mode_enabled_notify(move |bar| {
+                if bar.is_search_mode() {
+                    return;
+                }
+                let Some(tab) = w.upgrade().and_then(|tw| tw.current_tab()) else {
+                    return;
+                };
+                tab.term.search_set_regex(None, 0);
+                tab.term.unselect_all();
+                tab.term.grab_focus();
+            });
     }
 
     fn show_search(&self) {
@@ -870,7 +980,9 @@ impl TermWindow {
     }
 
     fn search_update(&self) {
-        let Some(tab) = self.current_tab() else { return };
+        let Some(tab) = self.current_tab() else {
+            return;
+        };
         let text = self.search_entry.text();
         self.search_entry.remove_css_class("error");
         if text.is_empty() {
@@ -897,7 +1009,9 @@ impl TermWindow {
         if self.search_entry.text().is_empty() {
             return;
         }
-        let Some(tab) = self.current_tab() else { return };
+        let Some(tab) = self.current_tab() else {
+            return;
+        };
         let found = if older {
             tab.term.search_find_previous()
         } else {
@@ -1081,7 +1195,11 @@ impl TermWindow {
 // ========================================================================= tab
 
 impl Tab {
-    fn new(win: &Rc<TermWindow>, command: Option<Vec<String>>, start_dir: Option<PathBuf>) -> Rc<Self> {
+    fn new(
+        win: &Rc<TermWindow>,
+        command: Option<Vec<String>>,
+        start_dir: Option<PathBuf>,
+    ) -> Rc<Self> {
         let (columns, rows) = {
             let s = win.settings.borrow();
             (s.columns, s.rows)
@@ -1091,7 +1209,8 @@ impl Tab {
         term.set_vexpand(true);
         term.set_size(i64::from(columns), i64::from(rows));
 
-        let scrollbar = gtk::Scrollbar::new(gtk::Orientation::Vertical, term.vadjustment().as_ref());
+        let scrollbar =
+            gtk::Scrollbar::new(gtk::Orientation::Vertical, term.vadjustment().as_ref());
 
         // Resize hook without polling: the terminal is overlaid on an
         // invisible DrawingArea that always gets exactly the same space, and
@@ -1126,6 +1245,15 @@ impl Tab {
         let page = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         page.append(&term_holder);
         page.append(&scrollbar);
+        // Kept see-through with background opacity (the scrollbar is not).
+        for w in [
+            page.upcast_ref::<gtk::Widget>(),
+            term_holder.upcast_ref(),
+            size_probe.upcast_ref(),
+            term.upcast_ref(),
+        ] {
+            w.add_css_class(CLEAR_CLASS);
+        }
 
         // Header in the title bar: the tab's name and a close button.
         // Click selects, middle-click closes.
@@ -1178,6 +1306,7 @@ impl Tab {
             out_src: RefCell::new(None),
             copy_src: RefCell::new(None),
             title_src: RefCell::new(None),
+            first_output: Cell::new(false),
             events: RefCell::new(VecDeque::new()),
             last_event: RefCell::new((String::new(), 0)),
             event_view: RefCell::new(None),
@@ -1215,7 +1344,9 @@ impl Tab {
             header.pick(x, y, gtk::PickFlags::DEFAULT),
             close_ref.upgrade(),
         ) {
-            (Some(hit), Some(close)) => hit == *close.upcast_ref::<gtk::Widget>() || hit.is_ancestor(&close),
+            (Some(hit), Some(close)) => {
+                hit == *close.upcast_ref::<gtk::Widget>() || hit.is_ancestor(&close)
+            }
             _ => false,
         };
         let on_close = Rc::new(on_close);
@@ -1249,12 +1380,18 @@ impl Tab {
             g.set_state(gtk::EventSequenceState::Claimed);
             win.select_tab(&tab);
             let start = graphene::Point::new(x as f32, y as f32);
-            origin.set(tab.header.compute_point(&win.strip, &start).map(|p| f64::from(p.x())));
+            origin.set(
+                tab.header
+                    .compute_point(&win.strip, &start)
+                    .map(|p| f64::from(p.x())),
+            );
         });
         let (w, origin) = (Rc::downgrade(&tab), drag_origin);
         drag.connect_drag_update(move |_, dx, _| {
             // A small wobble while clicking is not a drag.
-            let Some(x0) = origin.get().filter(|_| dx.abs() > 8.0) else { return };
+            let Some(x0) = origin.get().filter(|_| dx.abs() > 8.0) else {
+                return;
+            };
             let Some(tab) = w.upgrade() else { return };
             if let Some(win) = tab.win.upgrade() {
                 win.drag_tab_to(&tab, x0 + dx);
@@ -1274,7 +1411,9 @@ impl Tab {
     // ----------------------------------------------------------------- setup
 
     fn apply_appearance(&self) {
-        let s = self.settings.borrow();
+        // A copy, so no borrow is held while VTE runs (it can call back
+        // into this tab, see the rule at the top of this file).
+        let s = self.settings.borrow().clone();
         let t = &self.term;
         t.set_font(Some(&pango::FontDescription::from_string(&s.font)));
         let c = s.active_colours(style::dark());
@@ -1284,6 +1423,19 @@ impl Tab {
         let alpha = s.background_opacity.clamp(30, 100) as f32 / 100.0;
         let bg = gdk::RGBA::new(bg.red(), bg.green(), bg.blue(), alpha);
         t.set_colors(Some(&rgba(c.foreground)), Some(&bg), &palette_refs);
+        if super::debugging() {
+            // Background opacity: what VTE was given, what it will draw,
+            // and whether the display can show transparency at all.
+            let display = WidgetExt::display(t);
+            super::debug(format!(
+                "opacity {}%: VTE background set alpha {:.2}, draws {}; display composited {}, rgba {}",
+                s.background_opacity,
+                bg.alpha(),
+                t.color_background_for_draw().to_str(),
+                display.is_composited(),
+                display.is_rgba()
+            ));
+        }
         t.set_color_bold(Some(&rgba(c.bold_foreground)));
         t.set_color_cursor(Some(&rgba(c.cursor)));
         t.set_color_cursor_foreground(Some(&rgba(c.cursor_text)));
@@ -1318,29 +1470,22 @@ impl Tab {
         });
         self.scrollbar.set_visible(s.scrollbar);
         t.set_font_scale(f64::from(s.font_zoom) / 100.0);
-        let (border, urls) = (s.window_border, s.clickable_urls);
-        drop(s);
-        self.set_padding(border);
-        self.set_url_matching(urls);
+        self.set_padding(s.window_border);
+        self.set_url_matching(s.clickable_urls);
     }
 
     /// Highlight http(s) URLs (pointer cursor on hover) so Ctrl+click can
     /// open them.
     fn set_url_matching(&self, enabled: bool) {
         match (enabled, self.url_tag.get()) {
-            (true, None) => {
-                match vte::Regex::for_match(
-                    matching::URL_REGEX,
-                    PCRE2_MULTILINE | PCRE2_UTF | PCRE2_CASELESS,
-                ) {
-                    Ok(re) => {
-                        let tag = self.term.match_add_regex(&re, 0);
-                        self.term.match_set_cursor_name(tag, "pointer");
-                        self.url_tag.set(Some(tag));
-                    }
-                    Err(e) => self.log_event(format!("URL matching unavailable: {e}")),
+            (true, None) => match url_regex() {
+                Ok(re) => {
+                    let tag = self.term.match_add_regex(&re, 0);
+                    self.term.match_set_cursor_name(tag, "pointer");
+                    self.url_tag.set(Some(tag));
                 }
-            }
+                Err(e) => self.log_event(format!("URL matching unavailable: {e}")),
+            },
             (false, Some(tag)) => {
                 self.term.match_remove(tag);
                 self.url_tag.set(None);
@@ -1363,7 +1508,11 @@ impl Tab {
             }
         }
         if self.settings.borrow().allow_hyperlinks {
-            if let Some(url) = self.term.check_hyperlink_at(x, y).and_then(|h| matching::safe_url(&h)) {
+            if let Some(url) = self
+                .term
+                .check_hyperlink_at(x, y)
+                .and_then(|h| matching::safe_url(&h))
+            {
                 return Some((url, true));
             }
         }
@@ -1375,7 +1524,8 @@ impl Tab {
         if *self.hover_url.borrow() == link {
             return;
         }
-        self.term.set_tooltip_text(link.as_deref().map(link_tooltip).as_deref());
+        self.term
+            .set_tooltip_text(link.as_deref().map(link_tooltip).as_deref());
         *self.hover_url.borrow_mut() = link;
     }
 
@@ -1399,9 +1549,19 @@ impl Tab {
                 ));
             }
             if hyperlink {
-                detail.push_str("\n\nThe program chose this link's text, which may not match where it goes.");
+                detail.push_str(
+                    "\n\nThe program chose this link's text, which may not match where it goes.",
+                );
             }
-            let r = ask(&tab.window, "Open this link?", &detail, &["Cancel", "Open"], 0, 0).await;
+            let r = ask(
+                &tab.window,
+                "Open this link?",
+                &detail,
+                &["Cancel", "Open"],
+                0,
+                0,
+            )
+            .await;
             if r == 1 && !tab.closed.get() {
                 tab.launch_url(&url, idn.as_deref());
             }
@@ -1413,11 +1573,31 @@ impl Tab {
             Some(host) => self.log_event(format!("Opening {url} (real host {host})")),
             None => self.log_event(format!("Opening {url}")),
         }
-        gtk::UriLauncher::new(url).launch(
-            Some(&self.window),
-            None::<&gio::Cancellable>,
-            |_| {},
-        );
+        // Straight to the desktop's default browser through GIO. GTK's
+        // UriLauncher may go through the OpenURI portal, which refuses
+        // non-dumpable processes like Moriartty (see style.rs), and it
+        // failed silently. Here every failure is reported.
+        let scheme = if url
+            .get(..5)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https"))
+        {
+            "https"
+        } else {
+            "http"
+        };
+        let ctx = WidgetExt::display(&self.window).app_launch_context();
+        let result = match gio::AppInfo::default_for_uri_scheme(scheme) {
+            Some(app) => {
+                super::debug(format!("link: opening with {}", app.name()));
+                app.launch_uris(&[url], Some(&ctx))
+                    .map_err(|e| e.to_string())
+            }
+            None => Err(format!("No application is set to open {scheme} links.")),
+        };
+        if let Err(e) = result {
+            self.log_event(format!("Could not open {url}: {e}"));
+            super::message(&self.window, "Could not open the link", &e);
+        }
     }
 
     fn set_padding(&self, px: u16) {
@@ -1444,7 +1624,11 @@ impl Tab {
     /// directory" like kitty.
     fn title(&self) -> String {
         let s = self.settings.borrow();
-        let remote = self.remote_title.borrow().clone().filter(|_| !s.no_remote_wintitle);
+        let remote = self
+            .remote_title
+            .borrow()
+            .clone()
+            .filter(|_| !s.no_remote_wintitle);
         let base = remote
             .or_else(|| (!s.wintitle.is_empty()).then(|| strip_controls(&s.wintitle, 200)))
             .or_else(|| self.auto_title.borrow().clone())
@@ -1466,7 +1650,8 @@ impl Tab {
             self.label.set_markup(&text);
         }
         self.header.set_tooltip_text(Some(&title));
-        self.header.update_property(&[gtk::accessible::Property::Label(&title)]);
+        self.header
+            .update_property(&[gtk::accessible::Property::Label(&title)]);
     }
 
     fn update_title(&self) {
@@ -1476,12 +1661,34 @@ impl Tab {
         }
     }
 
-    /// Re-read "program: directory" (polled: nothing signals a change of
-    /// foreground program or directory).
+    /// Re-read "program: directory" once, shortly. Nothing signals a change
+    /// of foreground program, but one only happens around activity: Enter
+    /// starts a command, and a command ending makes the shell print its
+    /// prompt. So output, Enter and the shell's own directory reports (OSC 7)
+    /// schedule this, and an idle tab never wakes up. During continuous
+    /// output it runs at most once per TITLE_REFRESH.
+    fn schedule_title_refresh(self: &Rc<Self>) {
+        if self.ended.get() || self.title_src.borrow().is_some() {
+            return;
+        }
+        let w = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(TITLE_REFRESH, move || {
+            if let Some(tab) = w.upgrade() {
+                // Fired: the source is gone, so shutdown() mustn't remove it.
+                tab.title_src.borrow_mut().take();
+                tab.refresh_auto_title();
+            }
+        });
+        *self.title_src.borrow_mut() = Some(id);
+    }
+
+    /// Read "program: directory" from /proc now.
     fn refresh_auto_title(&self) {
         let t = {
             let g = self.session.borrow();
-            g.as_ref().and_then(|s| s.pty.describe()).map(|t| strip_controls(&t, 200))
+            g.as_ref()
+                .and_then(|s| s.pty.describe())
+                .map(|t| strip_controls(&t, 200))
         };
         if *self.auto_title.borrow() != t {
             *self.auto_title.borrow_mut() = t;
@@ -1553,7 +1760,17 @@ impl Tab {
             if !g.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
                 return;
             }
-            if let Some((url, hyperlink)) = tab.link_at(x, y) {
+            let link = tab.link_at(x, y);
+            // MORIARTTY_DEBUG: what a Ctrl+click found, to tell "no link
+            // seen" apart from "link seen but could not be opened".
+            if super::debugging() {
+                let (m, t) = tab.term.check_match_at(x, y);
+                super::debug(format!(
+                    "ctrl+click at ({x:.0}, {y:.0}): match {m:?} tag {t} (url tag {:?}) -> {link:?}",
+                    tab.url_tag.get()
+                ));
+            }
+            if let Some((url, hyperlink)) = link {
                 g.set_state(gtk::EventSequenceState::Claimed);
                 tab.open_url(url, hyperlink);
             }
@@ -1568,7 +1785,9 @@ impl Tab {
         legacy.set_propagation_phase(gtk::PropagationPhase::Capture);
         let w = weak.clone();
         legacy.connect_event(move |_, ev| {
-            let Some(tab) = w.upgrade() else { return glib::Propagation::Proceed };
+            let Some(tab) = w.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             if ev.event_type() != gdk::EventType::ButtonPress {
                 return glib::Propagation::Proceed;
             }
@@ -1607,8 +1826,12 @@ impl Tab {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let w = weak.clone();
         keys.connect_key_pressed(move |_, key, _, state| {
-            let Some(tab) = w.upgrade() else { return glib::Propagation::Proceed };
-            let Some(win) = tab.win.upgrade() else { return glib::Propagation::Proceed };
+            let Some(tab) = w.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let Some(win) = tab.win.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
             let alt = state.contains(gdk::ModifierType::ALT_MASK);
@@ -1626,7 +1849,11 @@ impl Tab {
                 && (key == gdk::Key::plus || key == gdk::Key::equal || key == gdk::Key::KP_Add)
             {
                 win.zoom(1);
-            } else if ctrl && !alt && !shift && (key == gdk::Key::minus || key == gdk::Key::KP_Subtract) {
+            } else if ctrl
+                && !alt
+                && !shift
+                && (key == gdk::Key::minus || key == gdk::Key::KP_Subtract)
+            {
                 win.zoom(-1);
             } else if ctrl && !alt && !shift && (key == gdk::Key::_0 || key == gdk::Key::KP_0) {
                 win.zoom(0);
@@ -1655,6 +1882,16 @@ impl Tab {
             let title = t.window_title().map(|s| strip_controls(&s, 200));
             *tab.remote_title.borrow_mut() = title.filter(|s| !s.trim().is_empty());
             tab.update_title();
+        });
+        // The shell reports a new directory (OSC 7, from VTE's shell
+        // integration). Only a cue to look: the directory shown and used for
+        // New Tab is always read from the shell itself (/proc), because any
+        // program's output can claim to be OSC 7.
+        let w = Rc::downgrade(self);
+        self.term.connect_current_directory_uri_changed(move |_| {
+            if let Some(tab) = w.upgrade() {
+                tab.schedule_title_refresh();
+            }
         });
     }
 
@@ -1685,7 +1922,9 @@ impl Tab {
         };
         if repeats > 0 {
             let s = if repeats == 1 { "" } else { "s" };
-            self.push_event(&format!("(previous message repeated {repeats} more time{s})"));
+            self.push_event(&format!(
+                "(previous message repeated {repeats} more time{s})"
+            ));
         }
         self.push_event(&msg);
     }
@@ -1813,7 +2052,7 @@ impl Tab {
                 *self.session.borrow_mut() = Some(Session { pty, log });
                 self.show_logging(log_path.as_deref());
                 let w = Rc::downgrade(&self);
-                let id = glib::unix_fd_add_local(
+                let id = crate::sys::unix_fd_add_local(
                     fd,
                     glib::IOCondition::IN | glib::IOCondition::HUP | glib::IOCondition::ERR,
                     move |_, _| match w.upgrade() {
@@ -1821,31 +2060,19 @@ impl Tab {
                         None => glib::ControlFlow::Break,
                     },
                 );
-                *self.io_src.borrow_mut() = Some(id);
-                // The tab name follows the foreground program and directory.
-                // Removed in shutdown(), which runs before the tab is dropped.
-                let w = Rc::downgrade(&self);
-                let id = glib::timeout_add_local(Duration::from_secs(1), move || match w.upgrade() {
-                    Some(tab) => {
-                        tab.refresh_auto_title();
-                        glib::ControlFlow::Continue
-                    }
-                    None => glib::ControlFlow::Break,
-                });
-                *self.title_src.borrow_mut() = Some(id);
+                if id.is_none() {
+                    self.log_event("Cannot watch the terminal for output");
+                }
+                *self.io_src.borrow_mut() = id;
                 // The pty was created at this size; later changes arrive
                 // through the layout hook (check_size).
                 self.last_size.set((cols, rows));
                 if self.win.upgrade().is_some_and(|w| w.is_current(&self)) {
                     self.term.grab_focus();
                 }
-                // Once the shell has had a moment to start.
-                let w = Rc::downgrade(&self);
-                glib::timeout_add_local_once(Duration::from_millis(200), move || {
-                    if let Some(tab) = w.upgrade() {
-                        tab.refresh_auto_title();
-                    }
-                });
+                // Name the tab once the program has had a moment to start;
+                // after that, activity keeps the name current.
+                self.schedule_title_refresh();
             }
             Err(e) => {
                 self.log_event(&e);
@@ -1892,7 +2119,14 @@ impl Tab {
             self.show_logging(None);
         }
         if !data.is_empty() {
+            if !self.first_output.replace(true) {
+                super::debug(format!(
+                    "first output from the program, {} ms after start",
+                    super::since_start_ms()
+                ));
+            }
             self.term.feed(&data);
+            self.schedule_title_refresh();
         }
         match status {
             Ok(ReadStatus::More) => glib::ControlFlow::Continue,
@@ -1929,6 +2163,10 @@ impl Tab {
             self.log_event("Output queue full; input discarded");
         }
         self.flush();
+        // Enter may start a program: the tab's name may be about to change.
+        if bytes.contains(&b'\r') {
+            self.schedule_title_refresh();
+        }
     }
 
     fn flush(self: &Rc<Self>) {
@@ -1957,14 +2195,18 @@ impl Tab {
             }
             if !q.is_empty() && self.out_src.borrow().is_none() {
                 let w = Rc::downgrade(self);
-                let id = glib::unix_fd_add_local(sess.pty.raw_fd(), glib::IOCondition::OUT, move |_, _| {
-                    if let Some(tab) = w.upgrade() {
-                        tab.out_src.borrow_mut().take();
-                        tab.flush();
-                    }
-                    glib::ControlFlow::Break
-                });
-                *self.out_src.borrow_mut() = Some(id);
+                let id = crate::sys::unix_fd_add_local(
+                    sess.pty.raw_fd(),
+                    glib::IOCondition::OUT,
+                    move |_, _| {
+                        if let Some(tab) = w.upgrade() {
+                            tab.out_src.borrow_mut().take();
+                            tab.flush();
+                        }
+                        glib::ControlFlow::Break
+                    },
+                );
+                *self.out_src.borrow_mut() = id;
             }
         }
         if let Some(e) = error {
@@ -2000,7 +2242,9 @@ impl Tab {
             (None, ExitState::Exited(c)) => (format!("Process exited with status {c}"), false),
             (None, ExitState::Signaled(sig)) => (format!("Process killed by signal {sig}"), false),
             (None, ExitState::Gone) => ("Process ended".to_string(), true),
-            (None, ExitState::Running) => ("Terminal closed; process terminated".to_string(), false),
+            (None, ExitState::Running) => {
+                ("Terminal closed; process terminated".to_string(), false)
+            }
         };
         self.log_event(&msg);
         let close = match self.settings.borrow().close_on_exit {
@@ -2014,7 +2258,9 @@ impl Tab {
             }
             return;
         }
-        self.feed_status(&format!("{msg}. Ctrl+Right-click → Restart Shell to start again."));
+        self.feed_status(&format!(
+            "{msg}. Ctrl+Right-click → Restart Shell to start again."
+        ));
         self.update_title();
     }
 
@@ -2156,7 +2402,8 @@ impl Tab {
                     return;
                 }
             }
-            let alive = !tab.closed.get() && tab.generation.get() == gen && tab.session.borrow().is_some();
+            let alive =
+                !tab.closed.get() && tab.generation.get() == gen && tab.session.borrow().is_some();
             if alive {
                 // paste_text honours bracketed-paste mode.
                 tab.term.paste_text(&clean);
@@ -2169,7 +2416,13 @@ impl Tab {
     fn bell(&self) {
         let (style, overload, n, t, mute) = {
             let s = self.settings.borrow();
-            (s.bell, s.bell_overload, s.bell_overload_n, s.bell_overload_t, s.bell_overload_s)
+            (
+                s.bell,
+                s.bell_overload,
+                s.bell_overload_n,
+                s.bell_overload_t,
+                s.bell_overload_s,
+            )
         };
         // Mark background tabs, whatever the bell style.
         if !self.win.upgrade().is_some_and(|w| w.is_current(self)) && !self.attention.get() {
@@ -2193,7 +2446,8 @@ impl Tab {
             if b.len() > n as usize {
                 b.clear();
                 drop(b);
-                self.bell_mute_until.set(Some(now + Duration::from_secs(u64::from(mute))));
+                self.bell_mute_until
+                    .set(Some(now + Duration::from_secs(u64::from(mute))));
                 self.log_event("Bell overload: bell silenced temporarily");
                 return;
             }
@@ -2204,7 +2458,9 @@ impl Tab {
             BellStyle::Visual => {
                 self.term.set_opacity(0.55);
                 let term = self.term.clone();
-                glib::timeout_add_local_once(Duration::from_millis(90), move || term.set_opacity(1.0));
+                glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                    term.set_opacity(1.0)
+                });
             }
         }
     }
@@ -2224,7 +2480,13 @@ impl Tab {
             .default_height(380)
             .build();
         let buf = gtk::TextBuffer::new(None);
-        let text = self.events.borrow().iter().map(String::as_str).collect::<Vec<_>>().join("\n");
+        let text = self
+            .events
+            .borrow()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
         buf.set_text(&text);
         *self.event_view.borrow_mut() = Some(buf.downgrade());
         let tv = gtk::TextView::with_buffer(&buf);

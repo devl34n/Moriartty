@@ -466,14 +466,25 @@ impl Default for Settings {
 }
 
 /// Zoom levels in percent, like a web browser's.
-pub const ZOOM_STEPS: &[u32] = &[30, 50, 67, 80, 90, 100, 110, 120, 133, 150, 170, 200, 240, 300, 400];
+pub const ZOOM_STEPS: &[u32] = &[
+    30, 50, 67, 80, 90, 100, 110, 120, 133, 150, 170, 200, 240, 300, 400,
+];
 
 /// Next zoom level up (`step > 0`), down (`step < 0`) or back to 100 %.
 pub fn next_zoom(current: u32, step: i32) -> u32 {
     match step {
         0 => 100,
-        s if s > 0 => ZOOM_STEPS.iter().copied().find(|&z| z > current).unwrap_or(current),
-        _ => ZOOM_STEPS.iter().rev().copied().find(|&z| z < current).unwrap_or(current),
+        s if s > 0 => ZOOM_STEPS
+            .iter()
+            .copied()
+            .find(|&z| z > current)
+            .unwrap_or(current),
+        _ => ZOOM_STEPS
+            .iter()
+            .rev()
+            .copied()
+            .find(|&z| z < current)
+            .unwrap_or(current),
     }
 }
 
@@ -496,7 +507,9 @@ impl Settings {
                 self.window_border = Settings::default().window_border;
             }
         }
-        self.config_version = CONFIG_VERSION;
+        // Never lower it: a file from a newer Moriartty keeps its version, so
+        // saving it here doesn't make the newer one migrate it again.
+        self.config_version = self.config_version.max(CONFIG_VERSION);
     }
 
     /// The palette in use: Moriartty Dark or Light when following the
@@ -516,7 +529,9 @@ impl Settings {
         self.scrollback = self.scrollback.min(1_000_000);
         self.window_border = self.window_border.min(64);
         self.background_opacity = self.background_opacity.clamp(30, 100);
-        self.font_zoom = self.font_zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
+        self.font_zoom = self
+            .font_zoom
+            .clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
         self.bell_overload_n = self.bell_overload_n.clamp(1, 1000);
         self.bell_overload_t = self.bell_overload_t.clamp(1, 3600);
         self.bell_overload_s = self.bell_overload_s.clamp(1, 3600);
@@ -610,9 +625,10 @@ mod tests {
 
     #[test]
     fn old_files_still_load() {
-        let s: Settings =
-            toml::from_str("host = \"example.com\"\nport = 2222\nprotocol = \"ssh\"\ncolumns = 100\n")
-                .unwrap();
+        let s: Settings = toml::from_str(
+            "host = \"example.com\"\nport = 2222\nprotocol = \"ssh\"\ncolumns = 100\n",
+        )
+        .unwrap();
         assert_eq!(s.columns, 100);
         assert_eq!(s.mouse_action, MouseAction::Compromise);
     }
@@ -628,13 +644,32 @@ mod tests {
     }
 
     #[test]
+    fn newer_files_keep_their_version() {
+        let mut s: Settings =
+            toml::from_str("config_version = 7\nsome_future_key = \"x\"\ncolumns = 90\n").unwrap();
+        s.migrate();
+        assert_eq!(s.config_version, 7);
+        assert_eq!(s.columns, 90);
+    }
+
+    #[test]
     fn untouched_old_defaults_get_the_new_look() {
-        let mut s = Settings { config_version: 1, colours: PUTTY, window_border: 1, ..Settings::default() };
+        let mut s = Settings {
+            config_version: 1,
+            colours: PUTTY,
+            window_border: 1,
+            ..Settings::default()
+        };
         s.migrate();
         assert!(s.auto_colours);
         assert_eq!(s.window_border, 6);
 
-        let dracula = SCHEMES.iter().find(|(n, _)| *n == "Dracula").unwrap().1.clone();
+        let dracula = SCHEMES
+            .iter()
+            .find(|(n, _)| *n == "Dracula")
+            .unwrap()
+            .1
+            .clone();
         let mut s = Settings {
             config_version: 1,
             auto_colours: false,
@@ -648,7 +683,11 @@ mod tests {
         assert_eq!(s.window_border, 0);
 
         // Current files are left alone.
-        let mut s = Settings { auto_colours: false, colours: PUTTY, ..Settings::default() };
+        let mut s = Settings {
+            auto_colours: false,
+            colours: PUTTY,
+            ..Settings::default()
+        };
         s.migrate();
         assert!(!s.auto_colours);
     }
@@ -658,7 +697,11 @@ mod tests {
         let s = Settings::default();
         assert_eq!(*s.active_colours(true), MORIARTTY_DARK);
         assert_eq!(*s.active_colours(false), MORIARTTY_LIGHT);
-        let s = Settings { auto_colours: false, colours: PUTTY, ..Settings::default() };
+        let s = Settings {
+            auto_colours: false,
+            colours: PUTTY,
+            ..Settings::default()
+        };
         assert_eq!(*s.active_colours(false), PUTTY);
     }
 }

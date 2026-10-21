@@ -51,6 +51,20 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.9.0" date="2026-10-21" type="development">
+      <description>
+        <p>Release candidate for 1.0.</p>
+        <ul>
+          <li>Idle tabs no longer use any processor time</li>
+          <li>Ctrl+click opens links again</li>
+          <li>Picking a colour scheme applies it right away</li>
+          <li>Background transparency works with more GTK themes</li>
+          <li>Built on the current GTK and VTE Rust bindings</li>
+          <li>Manual page and shell completions for bash, zsh and fish</li>
+          <li>More tests for settings files, log files and hostile terminal output</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-20">
       <description>
         <p>A fresh look.</p>

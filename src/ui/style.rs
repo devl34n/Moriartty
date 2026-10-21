@@ -45,9 +45,12 @@ pub fn dark() -> bool {
 
 /// Without a published scheme: the GTK theme's own idea.
 fn gtk_theme_is_dark() -> bool {
-    let Some(s) = gtk::Settings::default() else { return true };
+    let Some(s) = gtk::Settings::default() else {
+        return true;
+    };
     s.is_gtk_application_prefer_dark_theme()
-        || s.gtk_theme_name().is_some_and(|n| n.to_lowercase().contains("dark"))
+        || s.gtk_theme_name()
+            .is_some_and(|n| n.to_lowercase().contains("dark"))
 }
 
 pub fn high_contrast() -> bool {
@@ -147,9 +150,13 @@ fn read(bus: &gio::DBusConnection, key: &str) -> Option<u32> {
 /// GNOME's `color-scheme`, read and watched directly (dconf, no D-Bus
 /// round trip). False when this isn't GNOME's settings schema.
 fn watch_gnome() -> bool {
-    let Some(source) = gio::SettingsSchemaSource::default() else { return false };
+    let Some(source) = gio::SettingsSchemaSource::default() else {
+        return false;
+    };
     // Settings::new aborts on a missing schema or key, so check first.
-    let Some(schema) = source.lookup(GNOME_INTERFACE, true) else { return false };
+    let Some(schema) = source.lookup(GNOME_INTERFACE, true) else {
+        return false;
+    };
     if !schema.has_key("color-scheme") {
         return false;
     }
@@ -203,7 +210,9 @@ fn apply_gtk_theme() {
     if !HAS_SCHEME.with(Cell::get) {
         return;
     }
-    let Some(settings) = gtk::Settings::default() else { return };
+    let Some(settings) = gtk::Settings::default() else {
+        return;
+    };
     let dark = SCHEME.with(Cell::get) == 1;
     if settings.is_gtk_application_prefer_dark_theme() != dark {
         settings.set_gtk_application_prefer_dark_theme(dark);

@@ -7,8 +7,7 @@ pub const PCRE2_UTF: u32 = 0x0008_0000;
 
 /// http(s) URLs. Trailing punctuation that usually ends a sentence or a
 /// bracketed aside is not considered part of the URL.
-pub const URL_REGEX: &str =
-    r#"\bhttps?://[^\s<>"'`{}|\\^]*[^\s<>"'`{}|\\^.,;:!?)\]]"#;
+pub const URL_REGEX: &str = r#"\bhttps?://[^\s<>"'`{}|\\^]*[^\s<>"'`{}|\\^.,;:!?)\]]"#;
 
 /// Only plain web links may be opened: http(s), printable, bounded length.
 /// Anything else (file:, javascript:, custom schemes, ...) is refused, and
@@ -69,7 +68,11 @@ pub fn idn_ascii_host(url: &str) -> Option<String> {
         })
         .collect();
     // If it can't be encoded, still flag it rather than hiding the warning.
-    Some(labels.map(|l| l.join(".")).unwrap_or_else(|| "(cannot be shown)".into()))
+    Some(
+        labels
+            .map(|l| l.join("."))
+            .unwrap_or_else(|| "(cannot be shown)".into()),
+    )
 }
 
 /// RFC 3492 Punycode encoding of one label. Checked arithmetic throughout:
@@ -94,7 +97,11 @@ fn punycode_encode(input: &str) -> Option<String> {
 
     fn digit(d: u32) -> char {
         // 0..=25 -> a..=z, 26..=35 -> 0..=9
-        let b = if d < 26 { b'a' + d as u8 } else { b'0' + (d - 26) as u8 };
+        let b = if d < 26 {
+            b'a' + d as u8
+        } else {
+            b'0' + (d - 26) as u8
+        };
         b as char
     }
 
@@ -162,7 +169,10 @@ mod tests {
 
     #[test]
     fn urls() {
-        assert_eq!(safe_url("https://example.com/a?b=1").as_deref(), Some("https://example.com/a?b=1"));
+        assert_eq!(
+            safe_url("https://example.com/a?b=1").as_deref(),
+            Some("https://example.com/a?b=1")
+        );
         assert!(safe_url("HTTP://EXAMPLE.COM").is_some());
         assert!(safe_url("file:///etc/passwd").is_none());
         assert!(safe_url("javascript:alert(1)").is_none());
@@ -196,7 +206,10 @@ mod tests {
             Some("www.xn--bcher-kva.example")
         );
         // "аpple.com" with a Cyrillic а
-        assert_eq!(idn_ascii_host("https://\u{430}pple.com/").as_deref(), Some("xn--pple-43d.com"));
+        assert_eq!(
+            idn_ascii_host("https://\u{430}pple.com/").as_deref(),
+            Some("xn--pple-43d.com")
+        );
     }
 
     #[test]

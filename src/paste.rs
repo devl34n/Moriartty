@@ -49,13 +49,18 @@ pub fn paste_preview(clean: &str, max: usize) -> String {
         match c {
             '\r' => out.push('\n'),
             '\t' => out.push(c),
-            c if c.is_control() || is_invisible(c) => out.push_str(&format!("<U+{:04X}>", c as u32)),
+            c if c.is_control() || is_invisible(c) => {
+                out.push_str(&format!("<U+{:04X}>", c as u32))
+            }
             c => out.push(c),
         }
     }
     let total = clean.chars().count();
     if total > max {
-        out.push_str(&format!("\n… and {} more characters not shown", total - max));
+        out.push_str(&format!(
+            "\n… and {} more characters not shown",
+            total - max
+        ));
     }
     out
 }
@@ -66,7 +71,10 @@ mod tests {
 
     #[test]
     fn strips_escapes() {
-        assert_eq!(sanitize_paste("ls\x1b[201~; rm -rf ~\n", false), "ls[201~; rm -rf ~\r");
+        assert_eq!(
+            sanitize_paste("ls\x1b[201~; rm -rf ~\n", false),
+            "ls[201~; rm -rf ~\r"
+        );
         assert_eq!(sanitize_paste("a\r\nb\nc", false), "a\rb\rc");
         assert_eq!(sanitize_paste("x\u{9b}31m", false), "x31m");
         assert_eq!(sanitize_paste("tab\there", false), "tab\there");
@@ -75,9 +83,15 @@ mod tests {
     #[test]
     fn preview_shows_hidden_characters() {
         assert_eq!(paste_preview("ls\rpwd", 100), "ls\npwd");
-        assert_eq!(paste_preview("a\u{202E}b\u{200B}", 100), "a<U+202E>b<U+200B>");
+        assert_eq!(
+            paste_preview("a\u{202E}b\u{200B}", 100),
+            "a<U+202E>b<U+200B>"
+        );
         assert_eq!(paste_preview("x\x1by", 100), "x<U+001B>y");
-        assert_eq!(paste_preview("abcdef", 4), "abcd\n… and 2 more characters not shown");
+        assert_eq!(
+            paste_preview("abcdef", 4),
+            "abcd\n… and 2 more characters not shown"
+        );
     }
 
     #[test]

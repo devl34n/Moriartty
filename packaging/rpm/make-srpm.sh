@@ -27,7 +27,7 @@ trap 'rm -rf "$WORK"' EXIT
 SRC="$WORK/$NAME-$VERSION"
 mkdir -p "$SRC" "$WORK/SOURCES" "$OUTDIR"
 
-cp -a Cargo.toml Cargo.lock src packaging README.md LICENSE "$SRC/"
+cp -a Cargo.toml Cargo.lock src tests packaging README.md LICENSE "$SRC/"
 tar -C "$WORK" -czf "$WORK/SOURCES/$NAME-$VERSION.tar.gz" "$NAME-$VERSION"
 
 # Vendor crates, exactly as pinned in Cargo.lock, so the RPM build itself

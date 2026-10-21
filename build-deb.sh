@@ -4,10 +4,12 @@
 #
 # Usage:
 #   ./build-deb.sh                                   # Debian 13 (trixie)
-#   ./build-deb.sh docker.io/library/ubuntu:25.04    # another target
+#   ./build-deb.sh docker.io/library/ubuntu:26.04    # another target
 #
-# Requirements on the target: GTK >= 4.12, VTE (GTK 4) >= 0.76, Rust >= 1.80.
-# That means Debian 13+, or Ubuntu 25.04+. Debian 12 and Ubuntu 24.04 are too old.
+# Requirements: GTK >= 4.12 and VTE (GTK 4) >= 0.76 on the target, Rust >= 1.92
+# to build. On Debian 13 the Rust compiler comes from trixie-backports (its own
+# 1.85 is too old); the package itself only needs Debian 13's libraries.
+# Ubuntu 26.04 has a new enough Rust of its own.
 #
 # The source is streamed into the container as a tar archive (nothing from
 # the project is mounted); only the output directory dist/deb is shared.
@@ -36,7 +38,7 @@ fi
 mkdir -p "$OUT"
 rm -f "$OUT"/Cargo.lock
 
-files=(Cargo.toml src packaging README.md LICENSE)
+files=(Cargo.toml src tests packaging README.md LICENSE)
 [[ -f Cargo.lock ]] && files+=(Cargo.lock)
 
 echo "Building moriartty $VERSION .deb in $IMAGE using $ENGINE..."

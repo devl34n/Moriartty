@@ -29,7 +29,10 @@ fn notice(msg: String) {
 }
 
 pub fn take_notices() -> Vec<String> {
-    NOTICES.lock().map(|mut n| std::mem::take(&mut *n)).unwrap_or_default()
+    NOTICES
+        .lock()
+        .map(|mut n| std::mem::take(&mut *n))
+        .unwrap_or_default()
 }
 
 fn uid() -> u32 {
@@ -50,11 +53,20 @@ pub fn home_dir() -> Result<PathBuf, String> {
 }
 
 pub fn config_dir() -> Result<PathBuf, String> {
-    let base = match std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
-        Some(p) if p.is_absolute() => p,
-        _ => home_dir()?.join(".config"),
-    };
-    Ok(base.join("moriartty"))
+    // Tests never read or write the real configuration (cli tests load
+    // Default Settings, which could otherwise move a user's file aside).
+    #[cfg(test)]
+    {
+        Ok(test_support::scratch_dir().join("config"))
+    }
+    #[cfg(not(test))]
+    {
+        let base = match std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from) {
+            Some(p) if p.is_absolute() => p,
+            _ => home_dir()?.join(".config"),
+        };
+        Ok(base.join("moriartty"))
+    }
 }
 
 /// Create `p` (mode 0700) if needed and make sure it is a real directory,
@@ -71,7 +83,10 @@ pub fn ensure_private_dir(p: &Path) -> Result<(), String> {
     }
     let m = fs::symlink_metadata(p).map_err(err)?;
     if !m.is_dir() {
-        return Err(format!("{} is not a directory (symlinks are refused)", p.display()));
+        return Err(format!(
+            "{} is not a directory (symlinks are refused)",
+            p.display()
+        ));
     }
     if m.uid() != uid() {
         return Err(format!("{} is not owned by you", p.display()));
@@ -115,7 +130,8 @@ pub fn read_private_file(path: &Path) -> Result<String, String> {
         return Err(format!("{} is too large", path.display()));
     }
     if m.mode() & 0o077 != 0 {
-        f.set_permissions(Permissions::from_mode(0o600)).map_err(err)?;
+        f.set_permissions(Permissions::from_mode(0o600))
+            .map_err(err)?;
     }
     let mut s = String::new();
     f.take(MAX_FILE).read_to_string(&mut s).map_err(err)?;
@@ -168,8 +184,12 @@ pub fn list_sessions() -> Vec<String> {
         if let Ok(rd) = fs::read_dir(dir) {
             for ent in rd.flatten() {
                 let fname = ent.file_name();
-                let Some(fname) = fname.to_str() else { continue };
-                let Some(name) = fname.strip_suffix(".toml") else { continue };
+                let Some(fname) = fname.to_str() else {
+                    continue;
+                };
+                let Some(name) = fname.strip_suffix(".toml") else {
+                    continue;
+                };
                 if validate::session_name(name).is_ok() && name != DEFAULT_SESSION {
                     names.push(name.to_string());
                 }
@@ -214,7 +234,11 @@ pub fn load_session(name: &str) -> Result<Settings, String> {
 /// that doesn't parse is moved aside to `….toml.bad` first: it is kept for
 /// the user to fix, never silently overwritten.
 pub fn load_default() -> Settings {
-    match try_load(DEFAULT_SESSION) {
+    load_or_quarantine(DEFAULT_SESSION)
+}
+
+fn load_or_quarantine(name: &str) -> Settings {
+    match try_load(name) {
         Ok(s) => s,
         Err(LoadError::Read(e)) => {
             notice(format!("Ignoring saved default settings: {e}"));
@@ -253,3 +277,149 @@ pub fn delete_session(name: &str) -> Result<(), String> {
     }
 }
 
+/// Temporary directories for tests, so no test touches the real home.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+    use std::sync::OnceLock;
+
+    /// One private (0700) directory per test run, under the system's
+    /// temporary directory, with an unpredictable name.
+    pub fn scratch_dir() -> PathBuf {
+        static DIR: OnceLock<PathBuf> = OnceLock::new();
+        DIR.get_or_init(|| {
+            let nonce = RandomState::new().build_hasher().finish();
+            let d = std::env::temp_dir().join(format!(
+                "moriartty-test-{}-{nonce:016x}",
+                std::process::id()
+            ));
+            DirBuilder::new()
+                .mode(0o700)
+                .create(&d)
+                .expect("cannot create the test directory");
+            d
+        })
+        .clone()
+    }
+
+    /// A new, empty directory for one test.
+    pub fn fresh_dir(name: &str) -> PathBuf {
+        let d = scratch_dir().join(name);
+        DirBuilder::new()
+            .mode(0o700)
+            .create(&d)
+            .expect("test directory names must be unique");
+        d
+    }
+
+    pub fn mode(p: &Path) -> u32 {
+        fs::symlink_metadata(p).unwrap().mode() & 0o777
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{fresh_dir, mode};
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn running_as_root() -> bool {
+        uid() == 0
+    }
+
+    #[test]
+    fn config_lives_in_the_test_directory() {
+        let cfg = config_dir().unwrap();
+        assert!(cfg.starts_with(test_support::scratch_dir()));
+    }
+
+    #[test]
+    fn save_load_list_delete() {
+        let s = Settings {
+            columns: 123,
+            ..Settings::default()
+        };
+        save_session("Roundtrip test", &s).unwrap();
+        let path = session_path("Roundtrip test").unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        assert_eq!(load_session("Roundtrip test").unwrap().columns, 123);
+        assert!(list_sessions().iter().any(|n| n == "Roundtrip test"));
+        delete_session("Roundtrip test").unwrap();
+        assert!(!list_sessions().iter().any(|n| n == "Roundtrip test"));
+        assert!(load_session("Roundtrip test").is_err());
+    }
+
+    #[test]
+    fn unreadable_settings_are_moved_aside() {
+        let path = session_path("Broken test").unwrap();
+        write_private_atomic(&path, b"columns = \"not a number\"\n").unwrap();
+        let s = load_or_quarantine("Broken test");
+        assert_eq!(s, Settings::default());
+        assert!(!path.exists());
+        let bad = path.with_extension("toml.bad");
+        assert_eq!(
+            fs::read_to_string(&bad).unwrap(),
+            "columns = \"not a number\"\n"
+        );
+        assert!(take_notices().iter().any(|n| n.contains("Broken test")));
+    }
+
+    #[test]
+    fn symlinks_are_refused() {
+        let d = fresh_dir("symlinks");
+        let target = d.join("target");
+        write_private_atomic(&target, b"secret").unwrap();
+        let link = d.join("link");
+        symlink(&target, &link).unwrap();
+        assert!(read_private_file(&link).is_err());
+
+        let dir_link = d.join("dir-link");
+        symlink(&d, &dir_link).unwrap();
+        assert!(ensure_private_dir(&dir_link).is_err());
+
+        // Saving over a symlink replaces the link itself; what it pointed
+        // to is untouched.
+        write_private_atomic(&link, b"new").unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().is_file());
+        assert_eq!(fs::read(&target).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn permissions_are_repaired() {
+        let d = fresh_dir("permissions");
+        let f = d.join("settings.toml");
+        fs::write(&f, "columns = 90\n").unwrap();
+        fs::set_permissions(&f, Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(read_private_file(&f).unwrap(), "columns = 90\n");
+        assert_eq!(mode(&f), 0o600);
+
+        let sub = d.join("sub");
+        DirBuilder::new().mode(0o755).create(&sub).unwrap();
+        fs::set_permissions(&sub, Permissions::from_mode(0o755)).unwrap();
+        ensure_private_dir(&sub).unwrap();
+        assert_eq!(mode(&sub), 0o700);
+    }
+
+    #[test]
+    fn other_users_files_are_refused() {
+        // As root every file is "ours" (the RPM build runs as root), and the
+        // permission repair must never run on system files: skip.
+        if running_as_root() {
+            return;
+        }
+        let e = read_private_file(Path::new("/etc/passwd")).unwrap_err();
+        assert!(e.contains("not owned by you"), "{e}");
+        let e = ensure_private_dir(Path::new("/etc")).unwrap_err();
+        assert!(e.contains("not owned by you"), "{e}");
+    }
+
+    #[test]
+    fn large_and_special_files_are_refused() {
+        let d = fresh_dir("large");
+        let big = d.join("big.toml");
+        write_private_atomic(&big, &vec![b'#'; MAX_FILE as usize + 1]).unwrap();
+        assert!(read_private_file(&big).unwrap_err().contains("too large"));
+        assert!(read_private_file(&d).is_err());
+    }
+}

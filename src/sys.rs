@@ -1,5 +1,6 @@
 //! The only module allowed to use `unsafe`: thin wrappers around a handful
-//! of libc calls (pty creation, terminal ioctls, process hardening).
+//! of libc calls (pty creation, terminal ioctls, process hardening) and two
+//! C functions of libvte/libglib that the Rust bindings don't wrap.
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, OsStr};
@@ -10,6 +11,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+
+use gtk::glib;
 
 fn check(r: libc::c_int) -> io::Result<libc::c_int> {
     if r < 0 {
@@ -23,7 +26,15 @@ fn check(r: libc::c_int) -> io::Result<libc::c_int> {
 /// other same-user processes cannot ptrace us to read terminal contents.
 pub fn harden_process() -> io::Result<()> {
     // SAFETY: PR_SET_DUMPABLE takes plain integer arguments and touches no memory.
-    check(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong) })?;
+    check(unsafe {
+        libc::prctl(
+            libc::PR_SET_DUMPABLE,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    })?;
     Ok(())
 }
 
@@ -38,9 +49,89 @@ extern "C" {
 pub fn vte_version() -> u32 {
     // SAFETY: the three functions take no arguments and only return
     // constants compiled into libvte.
-    let (major, minor, micro) =
-        unsafe { (vte_get_major_version(), vte_get_minor_version(), vte_get_micro_version()) };
+    let (major, minor, micro) = unsafe {
+        (
+            vte_get_major_version(),
+            vte_get_minor_version(),
+            vte_get_micro_version(),
+        )
+    };
     major * 10_000 + minor * 100 + micro
+}
+
+/// What an fd watch calls: keep watching (`Continue`) or stop (`Break`).
+type FdCallback = Box<dyn FnMut(RawFd, glib::IOCondition) -> glib::ControlFlow>;
+
+// From libglib (glib-unix.h), which glib-sys already links. gtk-rs 0.22
+// dropped its wrapper, glib::unix_fd_add_local.
+extern "C" {
+    fn g_unix_fd_add_full(
+        priority: libc::c_int,
+        fd: libc::c_int,
+        condition: libc::c_uint,
+        function: Option<
+            unsafe extern "C" fn(libc::c_int, libc::c_uint, *mut libc::c_void) -> libc::c_int,
+        >,
+        user_data: *mut libc::c_void,
+        notify: Option<unsafe extern "C" fn(*mut libc::c_void)>,
+    ) -> libc::c_uint;
+}
+
+unsafe extern "C" fn fd_dispatch(
+    fd: libc::c_int,
+    condition: libc::c_uint,
+    data: *mut libc::c_void,
+) -> libc::c_int {
+    // SAFETY: `data` is the FdCallback boxed by unix_fd_add_local. GLib keeps
+    // it alive until fd_destroy, which never runs during a dispatch, and
+    // never dispatches the same source recursively.
+    let f = unsafe { &mut *data.cast::<FdCallback>() };
+    match f(fd, glib::IOCondition::from_bits_truncate(condition)) {
+        glib::ControlFlow::Continue => 1,
+        glib::ControlFlow::Break => 0,
+    }
+}
+
+unsafe extern "C" fn fd_destroy(data: *mut libc::c_void) {
+    // SAFETY: called once by GLib when the source goes away; `data` came
+    // from Box::into_raw in unix_fd_add_local.
+    drop(unsafe { Box::from_raw(data.cast::<FdCallback>()) });
+}
+
+/// Call `func` from the default main loop whenever `fd` meets `condition`,
+/// until it returns `Break` (what glib::unix_fd_add_local did). Main thread
+/// only, like every other GTK call here. `None` if GLib refused the fd.
+pub fn unix_fd_add_local<F>(
+    fd: RawFd,
+    condition: glib::IOCondition,
+    func: F,
+) -> Option<glib::SourceId>
+where
+    F: FnMut(RawFd, glib::IOCondition) -> glib::ControlFlow + 'static,
+{
+    let boxed: Box<FdCallback> = Box::new(Box::new(func));
+    let data = Box::into_raw(boxed).cast::<libc::c_void>();
+    // SAFETY: the two callbacks have the GUnixFDSourceFunc and GDestroyNotify
+    // signatures; from here on GLib owns `data` and frees it via fd_destroy.
+    // Priority 0 is G_PRIORITY_DEFAULT.
+    let id = unsafe {
+        g_unix_fd_add_full(
+            0,
+            fd,
+            condition.bits(),
+            Some(fd_dispatch),
+            data,
+            Some(fd_destroy),
+        )
+    };
+    if id == 0 {
+        // Refused before taking ownership (invalid fd): free it ourselves.
+        // SAFETY: GLib did not keep `data`, so this is its only owner.
+        drop(unsafe { Box::from_raw(data.cast::<FdCallback>()) });
+        return None;
+    }
+    // SAFETY: a non-zero id from g_unix_fd_add_full names a live source.
+    Some(unsafe { glib::translate::from_glib(id) })
 }
 
 pub fn set_nonblocking(fd: RawFd) -> io::Result<()> {
@@ -83,7 +174,8 @@ pub fn foreground_pgrp(fd: RawFd) -> io::Result<i32> {
 /// can never inherit them.
 pub fn spawn_on_pty(mut cmd: Command, cols: u16, rows: u16) -> io::Result<(File, Child)> {
     // SAFETY: posix_openpt takes only flags and returns a new fd or -1.
-    let master = check(unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) })?;
+    let master =
+        check(unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) })?;
     // SAFETY: posix_openpt succeeded, so the descriptor is open and owned only by us.
     let master = unsafe { OwnedFd::from_raw_fd(master) };
     // SAFETY: grantpt and unlockpt take a pty master fd and touch no memory.

@@ -42,7 +42,7 @@ fi
 mkdir -p "$OUT"
 rm -f "$OUT"/Cargo.lock
 
-files=(Cargo.toml src packaging README.md LICENSE)
+files=(Cargo.toml src tests packaging README.md LICENSE)
 [[ -f Cargo.lock ]] && files+=(Cargo.lock)
 
 echo "Building $NAME $VERSION RPM in $IMAGE using $ENGINE..."

@@ -1,0 +1,29 @@
+# Weekly pull requests for outdated or vulnerable dependencies. Nothing is
+# merged automatically: every update goes through CI and review.
+version: 2
+updates:
+  # The SHA-pinned actions in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Cargo.toml / Cargo.lock. gtk4, vte4 and glib-related crates move together,
+  # so they come as one grouped pull request.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      gtk-rs:
+        patterns:
+          - "gtk4*"
+          - "gdk4*"
+          - "gsk4*"
+          - "vte4*"
+          - "glib*"
+          - "gio*"
+          - "gobject*"
+          - "pango*"
+          - "cairo*"
+          - "graphene*"

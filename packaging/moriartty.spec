@@ -1,5 +1,5 @@
 Name:           moriartty
-Version:        0.6.0
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Private-by-default terminal for Linux, inspired by PuTTY
 License:        MIT
@@ -8,7 +8,7 @@ Source0:        %{name}-%{version}.tar.gz
 # needs no network access.
 Source1:        %{name}-%{version}-vendor.tar.gz
 
-BuildRequires:  rust >= 1.80
+BuildRequires:  rust >= 1.92
 BuildRequires:  cargo
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(gtk4) >= 4.12
@@ -60,6 +60,13 @@ for size in 16 24 32 48 64 128 256 512; do
 done
 install -Dpm0644 packaging/io.github.moriartty.Moriartty-symbolic.svg \
     %{buildroot}%{_datadir}/icons/hicolor/symbolic/apps/io.github.moriartty.Moriartty-symbolic.svg
+install -Dpm0644 packaging/moriartty.1 %{buildroot}%{_mandir}/man1/moriartty.1
+install -Dpm0644 packaging/completions/moriartty.bash \
+    %{buildroot}%{_datadir}/bash-completion/completions/moriartty
+install -Dpm0644 packaging/completions/_moriartty \
+    %{buildroot}%{_datadir}/zsh/site-functions/_moriartty
+install -Dpm0644 packaging/completions/moriartty.fish \
+    %{buildroot}%{_datadir}/fish/vendor_completions.d/moriartty.fish
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.moriartty.Moriartty.desktop
@@ -75,8 +82,32 @@ cargo test --release --frozen --offline
 %{_datadir}/icons/hicolor/*/apps/io.github.moriartty.Moriartty.png
 %{_datadir}/icons/hicolor/symbolic/apps/io.github.moriartty.Moriartty-symbolic.svg
 %{_metainfodir}/io.github.moriartty.Moriartty.metainfo.xml
+%{_mandir}/man1/moriartty.1*
+%{_datadir}/bash-completion/completions/moriartty
+%{_datadir}/zsh/site-functions/_moriartty
+%{_datadir}/fish/vendor_completions.d/moriartty.fish
 
 %changelog
+* Wed Oct 21 2026 Moriartty Developers - 0.9.0-1
+- Release candidate for 1.0 (includes the unreleased 0.7 and 0.8 work)
+- Built with gtk-rs 0.22 (gtk4 0.11, vte4 0.10), nix 0.31 and toml 1;
+  needs Rust 1.92 to build
+- Idle tabs no longer wake up every second: a tab's name is re-read only
+  after output, Enter or a directory change
+- The link pattern is compiled once for all tabs
+- Ctrl+click opens links with the desktop's browser directly (not through
+  the portal, which refuses Moriartty); failures are shown
+- Picking a colour scheme applies it at once; the Try button is gone
+- Background opacity works with themes that paint widget backgrounds
+- Man page and bash, zsh and fish completions
+- Tests for settings and log files (symlinks, other owners, permissions,
+  FIFOs), run in a temporary directory; tests no longer read the real
+  ~/.config
+- A headless test that hostile terminal output gets no answer containing
+  attacker-chosen text and never touches the clipboard
+- Performance budget (docs/PERFORMANCE.md, perf-check.sh)
+- Threat model, settings format and changelog documents
+
 * Tue Oct 20 2026 Moriartty Developers - 0.6.0-1
 - New default colours, Moriartty Dark and Light, following the desktop's
   light or dark style; dialogs and menus follow it too

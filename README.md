@@ -25,13 +25,16 @@ A fast, private-by-default terminal emulator for Linux, inspired by PuTTY's
   default.
 * **Works as your desktop's default terminal**, for "Open in Terminal" and
   apps that need a terminal (see below).
-* **Ctrl+click opens web links.** Only `http`/`https` links are opened, and
-  the full address is shown in a tooltip first.
+* **Ctrl+click opens web links** in your default browser. Only
+  `http`/`https` links are opened, and the full address is shown in a
+  tooltip first. If a link can't be opened, Moriartty says why.
 * **Follows your desktop's light or dark style** with the Moriartty Dark
   and Light colours, and the title bar takes the terminal's colours.
   Other schemes: PuTTY classic, Tango dark/light, Solarized dark/light,
-  Dracula, plus every colour adjustable individually, with a live preview.
-  Optional background transparency.
+  Dracula. Picking a scheme, or any single colour, shows in the terminal
+  at once; Cancel undoes it. Optional background transparency
+  (Appearance → Background opacity).
+* **Light when idle:** a tab that shows nothing new does no work at all.
 * **Drag tabs** to reorder them; the mouse wheel scrolls through them when
   they don't all fit.
 * The settings follow PuTTY's tree: Session (shell, saved sessions, close on
@@ -53,8 +56,11 @@ Updates then arrive with normal `dnf upgrade`.
 
 ## Install a prebuilt package
 
-Ready-made packages are in [`releases/`](releases/). From 0.4.1 on,
-`SHA256SUMS` is signed. Check the signature, then the packages:
+Ready-made packages are on the
+[Releases page](https://github.com/devl34n/Moriartty/releases), with a
+`SHA256SUMS` file signed by the author (`SHA256SUMS.asc`). Download the
+package, both checksum files and `signing-key.asc`, then check the signature
+and the package:
 
 ```sh
 gpg --import signing-key.asc                # once; compare the fingerprint
@@ -80,18 +86,16 @@ You can pass a different image to target another release:
 
 ```sh
 ./build-rpm.sh registry.fedoraproject.org/fedora:42
-./build-deb.sh docker.io/library/ubuntu:25.04
+./build-deb.sh docker.io/library/ubuntu:26.04
 ```
 
-Targets need GTK ≥ 4.12, VTE (GTK 4) ≥ 0.76 and Rust ≥ 1.80. That means
-Fedora 39+, Debian 13+ or Ubuntu 25.04+. Debian 12 and Ubuntu 24.04 are too
-old.
+Targets need GTK ≥ 4.12 and VTE (GTK 4) ≥ 0.76; building needs Rust ≥ 1.92
+(for the gtk-rs 0.22 bindings). Current Fedora has all of them. On Debian 13
+`build-deb.sh` takes the compiler from trixie-backports, because Debian 13's
+own Rust (1.85) is too old; the package still only needs Debian 13's
+libraries. Ubuntu 26.04 works with its own Rust (the second example above).
 
 For development with a local toolchain: `cargo run`, `cargo test`.
-
-To publish a release, build the packages, then run
-`./sign-release.sh you@example.org`. It copies them into `releases/`,
-rewrites `SHA256SUMS` and signs it with your GPG key.
 
 ## Command line
 
@@ -105,6 +109,19 @@ moriartty -hold -e ./test.sh  # keep the window open after the program exits
 moriartty -ls                 # login shell
 moriartty -log ~/term.log     # log all output
 ```
+
+`man moriartty` has the details; bash, zsh and fish complete the options
+and saved session names.
+
+## Documentation
+
+* [CHANGELOG.md](CHANGELOG.md): what changed in each release
+* [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): what Moriartty protects
+  against, and what it doesn't
+* [docs/SETTINGS_FORMAT.md](docs/SETTINGS_FORMAT.md): the saved settings
+  files, and the compatibility promise
+* [docs/PERFORMANCE.md](docs/PERFORMANCE.md): the performance budget
+* [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Make Moriartty the default terminal
 

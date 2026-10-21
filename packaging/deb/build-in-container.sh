@@ -8,12 +8,27 @@ NAME=moriartty
 REVISION=1
 export DEBIAN_FRONTEND=noninteractive
 
+# Debian 13's own Rust (1.85) is too old for gtk-rs 0.22 (needs 1.92), so
+# on trixie the compiler comes from trixie-backports. Only the build tools
+# do: the package is still built against Debian 13's GTK and VTE, so it
+# installs on Debian 13 and newer. Other images (e.g. Ubuntu 26.04) use
+# their own Rust.
+. /etc/os-release
+RUST_FROM=()
+if [[ "${VERSION_CODENAME:-}" == trixie ]]; then
+    echo "deb http://deb.debian.org/debian trixie-backports main" \
+        > /etc/apt/sources.list.d/trixie-backports.list
+    RUST_FROM=(-t trixie-backports)
+fi
+
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     ca-certificates build-essential pkg-config dpkg-dev file \
-    cargo rustc libgtk-4-dev libvte-2.91-gtk4-dev imagemagick >/dev/null
+    libgtk-4-dev libvte-2.91-gtk4-dev imagemagick >/dev/null
+apt-get install -y -qq --no-install-recommends "${RUST_FROM[@]}" cargo rustc >/dev/null
 
 echo "rustc: $(rustc --version)"
+echo "cargo: $(cargo --version)"
 cd /build
 
 # Pin dependency versions; hand the lock file back to the host.
@@ -47,6 +62,16 @@ for size in 16 24 32 48 64 128 256 512; do
 done
 install -Dm0644 packaging/io.github.moriartty.Moriartty-symbolic.svg \
     "$ROOT/usr/share/icons/hicolor/symbolic/apps/io.github.moriartty.Moriartty-symbolic.svg"
+
+install -d "$ROOT/usr/share/man/man1"
+gzip -9n < packaging/moriartty.1 > "$ROOT/usr/share/man/man1/moriartty.1.gz"
+chmod 0644 "$ROOT/usr/share/man/man1/moriartty.1.gz"
+install -Dm0644 packaging/completions/moriartty.bash \
+    "$ROOT/usr/share/bash-completion/completions/moriartty"
+install -Dm0644 packaging/completions/_moriartty \
+    "$ROOT/usr/share/zsh/vendor-completions/_moriartty"
+install -Dm0644 packaging/completions/moriartty.fish \
+    "$ROOT/usr/share/fish/vendor_completions.d/moriartty.fish"
 
 DOC="$ROOT/usr/share/doc/$NAME"
 install -d "$DOC"

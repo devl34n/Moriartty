@@ -1,0 +1,24 @@
+#compdef moriartty
+# zsh completion for moriartty
+
+_moriartty_sessions() {
+    local dir=${XDG_CONFIG_HOME:-$HOME/.config}/moriartty/sessions
+    local -a names
+    names=( $dir/*.toml(N:t:r) )
+    _describe 'saved session' names
+}
+
+_arguments -S \
+    '-load[use a saved session]:session:_moriartty_sessions' \
+    '-config[open the settings window first]' \
+    '(-T)-title[window title]:title:' \
+    '(-title)-T[window title]:title:' \
+    '-geometry[columns x rows]:geometry (e.g. 120x40):' \
+    '(--working-directory)-dir[start in directory]:directory:_files -/' \
+    '(-dir)--working-directory[start in directory]:directory:_files -/' \
+    '-hold[keep the window open after the program exits]' \
+    '-ls[run the shell as a login shell]' \
+    '-log[log all session output to a file]:log file:_files' \
+    '-help[show usage]' \
+    '-version[show the version]' \
+    '-e[run a command instead of the shell]:command:_command_names -e:*::arguments:_normal'

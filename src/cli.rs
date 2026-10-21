@@ -56,7 +56,9 @@ fn absolute_log_file(f: &str) -> Result<String, String> {
         return Ok(f.to_string());
     }
     let cwd = std::env::current_dir().map_err(|e| format!("-log: {e}"))?;
-    let cwd = cwd.to_str().ok_or("-log: current directory is not valid UTF-8")?;
+    let cwd = cwd
+        .to_str()
+        .ok_or("-log: current directory is not valid UTF-8")?;
     // '&' starts a placeholder in log names; keep the directory literal.
     Ok(format!("{}/{f}", cwd.replace('&', "&&")))
 }
@@ -148,7 +150,11 @@ mod tests {
 
     #[test]
     fn desktop_launcher_options() {
-        match parse(&args(&["-dir", "/tmp", "-hold", "-T", "build", "-e", "make"])).unwrap() {
+        match parse(&args(&[
+            "-dir", "/tmp", "-hold", "-T", "build", "-e", "make",
+        ]))
+        .unwrap()
+        {
             Launch::Open(s, Some(cmd), Some(dir)) => {
                 assert_eq!(dir, PathBuf::from("/tmp"));
                 assert_eq!(s.close_on_exit, CloseOnExit::Never);

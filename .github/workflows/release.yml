@@ -48,16 +48,21 @@ jobs:
           cd out && sha256sum -- * > SHA256SUMS
 
       # Create the release, or — if it was already created (e.g. by hand) —
-      # upload the packages to it, replacing files with the same name.
+      # add the packages to it. Files already published are never replaced
+      # (no --clobber): users may have verified them, so a rebuild that
+      # differs must become a new release, not a silent swap.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG exists; uploading packages to it."
-            gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
+            echo "Release $TAG exists; adding packages to it (existing files are kept)."
+            gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" out/* \
+            # 0.x versions and -rc tags are pre-releases, not "latest".
+            PRE=()
+            case "$TAG" in v0.*|*-rc*) PRE=(--prerelease) ;; esac
+            gh release create "$TAG" out/* "${PRE[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Moriartty $TAG" \

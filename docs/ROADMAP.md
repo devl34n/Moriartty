@@ -77,7 +77,7 @@ Process and files
 - [ ] App icon: icons are now square (the logo is padded instead of
       stretched) and there is a symbolic icon. Still to do: a full-colour
       **SVG** of the logo, which needs the original artwork.
-- [ ] New screenshots (the current one predates tabs).
+- [x] New screenshots (0.9.0), with a neutral `demo@moriartty` prompt.
 - [x] Settings: one window per terminal window, live preview of the
       colours that Cancel undoes.
 - [ ] Accessibility: high contrast respected (the title bar keeps the
@@ -85,62 +85,84 @@ Process and files
       settings tree already works with the keyboard. Still to do: keyboard
       focus on the tabs themselves.
 
-## 0.7: Lightweight and robust
+## 0.7: Lightweight and robust ✅ (in 0.9.0)
 
-- [ ] Replace the once-a-second `/proc` polling per tab with OSC 7 and VTE
-      signals, falling back to polling only the focused tab. Goal: no idle
-      wakeups.
-- [ ] Compile the URL regex once and share it between tabs.
-- [ ] Performance budget, checked before each release and kept in the repo:
-  - time to first prompt under 150 ms on a reference machine
-  - memory per additional tab
-  - stripped binary size
-- [ ] Move to the current gtk-rs / vte4 / nix releases and drop duplicate
-      crate versions.
-- [ ] Don't hold the settings borrow across VTE calls in `apply_appearance`.
+- [x] No more once-a-second `/proc` polling. A tab's name is re-read once,
+      shortly after output, Enter or an OSC 7 directory report; idle tabs
+      never wake up (better than the planned "poll only the focused tab").
+      OSC 7 is only a cue: the directory is always read from the shell.
+- [x] Compile the URL regex once and share it between tabs.
+- [x] Performance budget in `docs/PERFORMANCE.md`, measured by
+      `perf-check.sh`: time to first output (< 150 ms), idle wakeups, memory
+      per additional tab, stripped binary size. Still to do: record the
+      0.9.0 numbers.
+- [x] Moved to gtk4 0.11 / vte4 0.10 (gtk-rs 0.22), nix 0.31 and toml 1; the
+      duplicate toml 0.8 crates are gone. (gtk-rs dropped
+      `glib::unix_fd_add_local`; `sys.rs` now calls `g_unix_fd_add_full`.)
+      Building needs Rust 1.92: Debian 13 gets it from trixie-backports.
+- [x] Don't hold the settings borrow across VTE calls in `apply_appearance`.
 
-## 0.8: Assurance and supply chain
+## 0.8: Assurance and supply chain (in 0.9.0)
 
 Testing
-- [ ] Tests for `storage.rs` (symlink refusal, foreign owner, permission
-      repair) and log file opening, run against a temporary
-      `XDG_CONFIG_HOME`. No test touches the real home directory.
-- [ ] `cargo-fuzz` targets for paste sanitising, the log stripper, URL
-      checks and punycode, and settings loading, with a short fuzz run in CI.
-- [ ] An "evil bytes" corpus (OSC 52, title reports, DECRQSS, answerback,
-      bracketed-paste escapes) fed into VTE in a headless test, so
-      protections that today rely on VTE not implementing a feature stay
-      locked in.
+- [x] Tests for `storage.rs` (symlink refusal, foreign owner, permission
+      repair, size limit, quarantine of unreadable files) and log file
+      opening (symlinks, devices, FIFOs, append/overwrite). Under `cargo
+      test` the config directory is a private temporary directory, so no
+      test touches the real home directory (before, the `cli` tests did).
+- [ ] `cargo-fuzz` targets. Moved to 1.0 preparation: the code is a single
+      binary crate, so fuzzing first needs a library/binary split, and the
+      fuzz run needs a nightly toolchain in CI.
+- [x] "Evil bytes" corpus fed into VTE (`tests/evil_bytes.rs`); CI runs it
+      under `xvfb-run` on Fedora.
 
 CI
-- [ ] `cargo fmt --check`, a wider clippy lint set, an MSRV (1.80) job.
-- [ ] Pin `cargo-deny` and the container images (by digest) in CI and the
-      build scripts.
-- [ ] Dependabot for GitHub Actions, Cargo and containers.
+- [x] Formatting check (`./format.sh` fixes it), wider clippy lints
+      (performance and complexity reported), a job building with the
+      `rust-version` from `Cargo.toml` (now 1.92).
+- [ ] Pin `cargo-deny` and the container images by digest: needs the exact
+      versions and digests to be chosen by the maintainer.
+- [x] Dependabot for GitHub Actions and Cargo (the container images are
+      named in scripts, not Dockerfiles, which Dependabot can't update).
 
 Releases
-- [ ] Build provenance (`actions/attest-build-provenance`) and an SBOM
-      (CycloneDX) for every release.
-- [ ] The maintainer's GPG signature of `SHA256SUMS` is attached to the
-      GitHub Release, so there is one signed set of checksums.
-- [ ] Published release assets are never replaced (no `--clobber`).
-- [ ] Reproducible builds: `SOURCE_DATE_EPOCH`, `--remap-path-prefix`,
-      normalised archive timestamps, and a CI job that builds twice and
-      compares.
-- [ ] Stop committing packages to `releases/`; GitHub Releases and COPR are
-      the channels.
+- [ ] Build provenance and an SBOM: needs the attestation actions pinned to
+      reviewed commit SHAs.
+- [x] The maintainer's GPG signature attached to the GitHub Release:
+      `sign-release.sh` downloads what CI published, checks it, signs
+      `SHA256SUMS` and uploads the signature (0.x tags are pre-releases).
+- [x] Published release assets are never replaced (no `--clobber`).
+- [ ] Reproducible builds and a build-twice CI job.
+- [ ] Stop committing packages to `releases/` (`git rm` by the maintainer).
 
-## 0.9: Release candidate
+## 0.9: Release candidate (0.9.0)
 
-- [ ] `docs/THREAT_MODEL.md`: what Moriartty defends against (malicious
-      output, malicious pastes, lookalike links, local file attacks) and what
-      it does not (a compromised account, the shell itself).
-- [ ] `CHANGELOG.md` and `CONTRIBUTING.md`.
-- [ ] Man page and bash/zsh/fish completions in both packages.
-- [ ] Security review of everything since 0.5, and a manual run of the evil
-      bytes corpus on Fedora, Debian 13 and Ubuntu 25.04+.
-- [ ] Freeze the settings format: version 1 documented, forward
-      compatibility promised.
+- [x] `docs/THREAT_MODEL.md`.
+- [x] `CHANGELOG.md` and `CONTRIBUTING.md`.
+- [x] Man page and bash/zsh/fish completions in both packages.
+- [ ] Security review of everything since 0.5 (code review done while
+      preparing 0.9: settings saved by newer versions no longer lose their
+      format version), and a manual run of the evil bytes corpus on Fedora,
+      Debian 13 and Ubuntu 26.04: maintainer testing.
+- [x] Settings format frozen at version 2 and documented in
+      `docs/SETTINGS_FORMAT.md`, with forward compatibility promised.
+
+Fixed during 0.9 testing
+- [x] Ctrl+click did not open links: GTK's launcher can go through the
+      OpenURI portal, which refuses non-dumpable processes, and failed
+      silently. Links now go to the default browser through GIO, and
+      failures are reported.
+- [x] A colour scheme was only kept after pressing Try. Picking one now
+      applies it at once; Try is gone.
+- [x] Background opacity showed a darker colour instead of the desktop with
+      themes that paint stacks or boxes. Moriartty's widgets between the
+      window and the terminal are now kept clear.
+
+Known, left as is
+- GTK 4.20 warns that `gtk-application-prefer-dark-theme` (used to make
+  dialogs follow the desktop) is replaced by `gtk-interface-color-scheme`.
+  The old property still works; switching needs GTK 4.20, newer than
+  Debian 13's.
 
 ## 1.0: Release criteria
 

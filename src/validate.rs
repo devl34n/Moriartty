@@ -46,7 +46,9 @@ pub fn program(p: &str) -> Result<(), String> {
     path(p)?;
     let expanded = expand_tilde(p);
     if !expanded.is_absolute() {
-        return Err(format!("Program {p:?} must be an absolute path (e.g. /usr/bin/zsh)"));
+        return Err(format!(
+            "Program {p:?} must be an absolute path (e.g. /usr/bin/zsh)"
+        ));
     }
     if !is_executable(&expanded) {
         return Err(format!("{p:?} is not an executable file"));

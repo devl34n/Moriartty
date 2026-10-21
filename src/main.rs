@@ -21,6 +21,7 @@ use gtk::{gio, glib};
 pub const APP_ID: &str = "io.github.moriartty.Moriartty";
 
 fn main() -> glib::ExitCode {
+    ui::mark_start();
     if let Err(e) = sys::harden_process() {
         eprintln!("moriartty: warning: cannot make the process non-dumpable: {e}");
     }
@@ -80,7 +81,9 @@ fn main() -> glib::ExitCode {
             cli::Launch::Configure(s) => {
                 ui::config_dialog::show(app, s.clone(), ui::config_dialog::Mode::New);
             }
-            cli::Launch::Open(s, cmd, dir) => ui::terminal::open(app, s.clone(), cmd.clone(), dir.clone()),
+            cli::Launch::Open(s, cmd, dir) => {
+                ui::terminal::open(app, s.clone(), cmd.clone(), dir.clone())
+            }
             cli::Launch::Help | cli::Launch::Version => {}
         }
     });

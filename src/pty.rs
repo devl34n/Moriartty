@@ -38,7 +38,8 @@ pub struct Pty {
 /// `$SHELL`, else the passwd entry, else /bin/sh. Only an absolute path to
 /// an executable file counts.
 fn login_shell() -> PathBuf {
-    let usable = |p: &Path| p.is_absolute() && p.to_str().is_some_and(|s| validate::program(s).is_ok());
+    let usable =
+        |p: &Path| p.is_absolute() && p.to_str().is_some_and(|s| validate::program(s).is_ok());
     if let Some(sh) = std::env::var_os("SHELL").map(PathBuf::from) {
         if usable(&sh) {
             return sh;
@@ -69,7 +70,10 @@ pub fn spawn(
         Some([prog, args @ ..]) => {
             let mut c = Command::new(prog);
             c.args(args);
-            (c, format!("Running {prog:?} with {} argument(s)", args.len()))
+            (
+                c,
+                format!("Running {prog:?} with {} argument(s)", args.len()),
+            )
         }
         _ => {
             let shell = if s.shell.is_empty() {
@@ -83,7 +87,14 @@ pub fn spawn(
                 let name = shell.file_name().and_then(|n| n.to_str()).unwrap_or("sh");
                 c.arg0(format!("-{name}"));
             }
-            (c, format!("Started {}{}", shell.display(), if s.login_shell { " (login shell)" } else { "" }))
+            (
+                c,
+                format!(
+                    "Started {}{}",
+                    shell.display(),
+                    if s.login_shell { " (login shell)" } else { "" }
+                ),
+            )
         }
     };
 
@@ -108,7 +119,10 @@ pub fn spawn(
         }
         _ => {
             // Launched from a desktop menu the cwd is usually "/"; use $HOME then.
-            if std::env::current_dir().map(|d| d == Path::new("/")).unwrap_or(true) {
+            if std::env::current_dir()
+                .map(|d| d == Path::new("/"))
+                .unwrap_or(true)
+            {
                 if let Ok(home) = storage::home_dir() {
                     cmd.current_dir(home);
                 }
@@ -118,7 +132,14 @@ pub fn spawn(
 
     let (master, child) = sys::spawn_on_pty(cmd, cols.max(1), rows.max(1))
         .map_err(|e| format!("Cannot start program: {e}"))?;
-    Ok((Pty { master, child: Some(child), is_shell }, desc))
+    Ok((
+        Pty {
+            master,
+            child: Some(child),
+            is_shell,
+        },
+        desc,
+    ))
 }
 
 impl Pty {

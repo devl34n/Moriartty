@@ -34,6 +34,19 @@ pub fn message(parent: &impl IsA<gtk::Window>, message: &str, detail: &str) {
     d.show(Some(parent));
 }
 
+static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Note when Moriartty started (first thing in main), for timings in the
+/// debug log.
+pub fn mark_start() {
+    let _ = START.set(std::time::Instant::now());
+}
+
+/// Milliseconds since `mark_start`.
+pub fn since_start_ms() -> u128 {
+    START.get().map_or(0, |t| t.elapsed().as_millis())
+}
+
 /// Whether MORIARTTY_DEBUG is set.
 pub fn debugging() -> bool {
     std::env::var_os("MORIARTTY_DEBUG").is_some()

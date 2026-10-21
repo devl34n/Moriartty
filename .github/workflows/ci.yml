@@ -13,7 +13,7 @@ jobs:
   build:
     name: Build and test (${{ matrix.image }})
     runs-on: ubuntu-latest
-    # GitHub's Ubuntu runners ship a GTK/VTE too old for gtk4-rs 0.9 / VTE 0.76,
+    # GitHub's Ubuntu runners ship a GTK/VTE/Rust too old for gtk-rs 0.22,
     # so build inside distribution containers that have them.
     container: ${{ matrix.image }}
     strategy:
@@ -23,33 +23,86 @@ jobs:
           - registry.fedoraproject.org/fedora:latest
           - docker.io/library/debian:trixie
     steps:
+      # xvfb-run and xauth: a virtual display for the evil bytes test.
       - name: Install build dependencies (Fedora)
         if: startsWith(matrix.image, 'registry.fedoraproject.org')
-        run: dnf install -y --setopt=install_weak_deps=False rust cargo clippy gcc gtk4-devel vte291-gtk4-devel git
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          rust cargo clippy rustfmt gcc gtk4-devel vte291-gtk4-devel git
+          /usr/bin/xvfb-run /usr/bin/xauth
 
       - name: Install build dependencies (Debian)
         if: startsWith(matrix.image, 'docker.io/library/debian')
+        # Debian 13's own Rust (1.85) is too old for gtk-rs 0.22 (1.92+), so
+        # the compiler comes from trixie-backports, as in build-deb.sh.
         run: |
+          echo "deb http://deb.debian.org/debian trixie-backports main" \
+            > /etc/apt/sources.list.d/trixie-backports.list
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            ca-certificates build-essential pkg-config git cargo rustc libgtk-4-dev libvte-2.91-gtk4-dev
+            ca-certificates build-essential pkg-config git libgtk-4-dev libvte-2.91-gtk4-dev
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            -t trixie-backports cargo rustc
 
       # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
 
+      # The same check as ./format.sh; run that to fix a failure here.
+      - name: Formatting
+        if: startsWith(matrix.image, 'registry.fedoraproject.org')
+        run: find src tests -name '*.rs' -print0 | xargs -0 rustfmt --check --edition 2021
+
       - name: Build
         run: cargo build --release --locked
 
-      - name: Test
+      # On Fedora the evil bytes test gets a virtual display and must run
+      # (MORIARTTY_REQUIRE_DISPLAY); on Debian it skips itself.
+      - name: Test (Fedora, with display)
+        if: startsWith(matrix.image, 'registry.fedoraproject.org')
+        env:
+          MORIARTTY_REQUIRE_DISPLAY: "1"
+          GSK_RENDERER: cairo
+        run: xvfb-run -a cargo test --release --locked
+
+      - name: Test (Debian)
+        if: startsWith(matrix.image, 'docker.io/library/debian')
         run: cargo test --release --locked
 
-      # Lints: likely bugs and suspicious code fail the build; style
-      # suggestions are only reported. Fedora only (it packages clippy).
+      # Lints: likely bugs and suspicious code fail the build; performance
+      # and complexity suggestions are reported. Fedora only (it packages
+      # clippy).
       - name: Clippy
         if: startsWith(matrix.image, 'registry.fedoraproject.org')
-        run: cargo clippy --release --locked --all-targets -- -D clippy::correctness -D clippy::suspicious
+        run: >
+          cargo clippy --release --locked --all-targets --
+          -D clippy::correctness -D clippy::suspicious
+          -W clippy::perf -W clippy::complexity
+
+  msrv:
+    name: Minimum Rust version (rust-version in Cargo.toml)
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: dnf install -y --setopt=install_weak_deps=False rustup gcc gtk4-devel vte291-gtk4-devel git
+
+      # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install the minimum Rust
+        run: |
+          MSRV=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "MSRV: $MSRV"
+          rustup-init -y --profile minimal --default-toolchain "$MSRV"
+
+      - name: Build with it
+        run: |
+          "$HOME/.cargo/bin/cargo" --version
+          "$HOME/.cargo/bin/cargo" build --locked
 
   audit:
     name: Dependency audit (advisories, licences, sources)

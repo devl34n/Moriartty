@@ -1,0 +1,106 @@
+.TH MORIARTTY 1 "2026-10-21" "Moriartty 0.9.0" "User Commands"
+.SH NAME
+moriartty \- private-by-default terminal emulator inspired by PuTTY's pterm
+.SH SYNOPSIS
+.B moriartty
+[\fIoptions\fR] [\fB\-e\fR \fIcommand\fR [\fIargs\fR...]]
+.SH DESCRIPTION
+.B moriartty
+opens a terminal window running your shell. It keeps PuTTY's habits:
+selecting text copies it (to the PRIMARY selection), the right mouse button
+pastes, and the settings follow PuTTY's configuration tree.
+.PP
+Ctrl+Right-click inside the terminal opens the menu (Copy, Paste, Find,
+New Tab, New Window, Settings, Event Log, ...).
+.SH OPTIONS
+.TP
+.BI \-load " name"
+Use the saved session (settings profile)
+.I name
+instead of Default Settings.
+.TP
+.B \-config
+Open the settings window first.
+.TP
+.BI \-title " text\fR, " \-T " text"
+Window title.
+.TP
+.BI \-geometry " columns" x rows
+Window size in characters, for example 120x40.
+.TP
+.BI \-dir " directory\fR, " \-\-working\-directory " directory"
+Start in
+.IR directory .
+.TP
+.B \-hold
+Keep the window open after the program exits.
+.TP
+.B \-ls
+Run the shell as a login shell.
+.TP
+.BI \-log " file"
+Log all session output to
+.IR file .
+.TP
+.BI \-e " command " \fR[\fIargs\fR...]
+Run
+.I command
+instead of the shell. It is started directly, not through a shell, and
+must be the last option.
+.TP
+.BR \-help ", " \-version
+Show usage or the version, and exit.
+.SH KEYBOARD
+.TP
+.BR Ctrl+Shift+C ", " Ctrl+Insert
+Copy to the clipboard.
+.TP
+.BR Ctrl+Shift+V ", " Shift+Insert
+Paste from the clipboard.
+.TP
+.B Ctrl+Shift+F
+Find in scrollback.
+.TP
+.BR Ctrl+= ", " Ctrl+\- ", " Ctrl+0
+Zoom in, out, back to normal.
+.TP
+.BR Ctrl+Shift+T ", " Ctrl+Shift+W
+New tab, close tab.
+.TP
+.BR Ctrl+PgUp ", " Ctrl+PgDn ", " Alt+1 ... Alt+9
+Switch tabs (with two or more tabs).
+.TP
+.B Ctrl+Shift+N
+New window.
+.TP
+.B Ctrl+Shift+P
+Settings.
+.TP
+.B Ctrl+click
+Open the http(s) link under the pointer.
+.SH SECURITY
+Pasted text is stripped of escape sequences and other control characters,
+and pastes of several lines, or with invisible or direction-changing
+characters, ask first. Programs cannot write to the clipboard or read the
+window title. Only http and https links can be opened, never automatically.
+Settings and log files are created private (mode 0600) and symlinks are
+refused. See
+.I /usr/share/doc/moriartty/README.md
+for the full list.
+.SH ENVIRONMENT
+.TP
+.B MORIARTTY_DEBUG
+If set, diagnostics are written to standard error.
+.TP
+.B XDG_CONFIG_HOME
+Where settings are kept (default
+.IR ~/.config ).
+.SH FILES
+.TP
+.I $XDG_CONFIG_HOME/moriartty/sessions/
+Saved sessions, one TOML file each.
+.I Default Settings.toml
+applies to every new window.
+.SH SEE ALSO
+.BR pterm (1),
+.BR putty (1)

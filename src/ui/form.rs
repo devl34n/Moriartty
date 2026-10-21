@@ -279,7 +279,10 @@ impl Form {
         let (s, changed) = (self.s.clone(), self.changed.clone());
         b.connect_rgba_notify(move |b| {
             let c = b.rgba();
-            set(&mut *s.borrow_mut(), [to8(c.red()), to8(c.green()), to8(c.blue())]);
+            set(
+                &mut *s.borrow_mut(),
+                [to8(c.red()), to8(c.green()), to8(c.blue())],
+            );
             changed.fire();
         });
         let b2 = b.clone();
