@@ -56,6 +56,35 @@ pub fn program(p: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The "command to run" setting: a program and its arguments, exec'd
+/// directly (no shell). A program name without a `/` is looked up on
+/// $PATH; one with a `/` must be an absolute path. Empty means the shell.
+pub fn command(argv: &[String]) -> Result<(), String> {
+    let Some((prog, args)) = argv.split_first() else {
+        return Ok(());
+    };
+    if argv.len() > 256 {
+        return Err("The command has too many arguments".into());
+    }
+    if let Some(a) = args.iter().find(|a| a.len() > 4096 || has_control(a)) {
+        return Err(format!("Invalid argument {a:?} in the command"));
+    }
+    path(prog).map_err(|_| format!("Invalid program {prog:?} in the command"))?;
+    if prog.contains('/') {
+        program(prog)
+    } else if in_path(prog) {
+        Ok(())
+    } else {
+        Err(format!("Program {prog:?} not found on $PATH"))
+    }
+}
+
+fn in_path(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p).any(|d| d.is_absolute() && is_executable(&d.join(name)))
+    })
+}
+
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p)
@@ -100,6 +129,18 @@ mod tests {
         assert!(program("sh").is_err());
         assert!(program("/etc/passwd").is_err());
         assert!(program("/bin/sh\n").is_err());
+    }
+
+    #[test]
+    fn commands() {
+        let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(command(&[]).is_ok());
+        assert!(command(&argv(&["sh", "-c", "echo hi"])).is_ok());
+        assert!(command(&argv(&["/bin/sh"])).is_ok());
+        assert!(command(&argv(&["no-such-program-moriartty"])).is_err());
+        assert!(command(&argv(&["bin/sh"])).is_err());
+        assert!(command(&argv(&["sh", "a\nb"])).is_err());
+        assert!(command(&argv(&["sh\u{1b}"])).is_err());
     }
 
     #[test]

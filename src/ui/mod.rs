@@ -1,5 +1,6 @@
 pub mod config_dialog;
 pub mod form;
+pub mod keys;
 pub mod style;
 pub mod terminal;
 

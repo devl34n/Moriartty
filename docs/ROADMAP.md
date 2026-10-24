@@ -130,7 +130,8 @@ Releases
       reviewed commit SHAs.
 - [x] The maintainer's GPG signature attached to the GitHub Release:
       `sign-release.sh` downloads what CI published, checks it, signs
-      `SHA256SUMS` and uploads the signature (0.x tags are pre-releases).
+      `SHA256SUMS` and uploads the signature (since 0.9.5 only `-rc` tags
+      are pre-releases).
 - [x] Published release assets are never replaced (no `--clobber`).
 - [ ] Reproducible builds and a build-twice CI job.
 - [ ] Stop committing packages to `releases/` (`git rm` by the maintainer).
@@ -163,6 +164,24 @@ Known, left as is
   dialogs follow the desktop) is replaced by `gtk-interface-color-scheme`.
   The old property still works; switching needs GTK 4.20, newer than
   Debian 13's.
+
+## 0.9.5: Everyday power (0.9.5) ✅
+
+The first regular release. What people missed most, within the principles
+above.
+
+- [x] Saved sessions that run a command instead of the shell (`command`),
+      exec'd directly, falling back to the shell if it can't be found.
+- [x] A sessions drop-down next to the + button (and Ctrl+Shift+S, and the
+      menu): picking one opens it in a new window.
+- [x] Shell integration (OSC 133) with opt-in scripts for bash, zsh and
+      fish: jump between prompts, and a notice when a long command ends in
+      a background tab. Marks are only read; the notice shows nothing from
+      the output.
+- [x] Every keyboard shortcut can be changed or turned off (`keys`).
+- [ ] Open a saved session in a new tab of the current window: needs
+      settings per tab rather than per window.
+- [ ] Copy the last command's output, using the same marks.
 
 ## 1.0: Release criteria
 

@@ -4,9 +4,11 @@
 //! All `unsafe` code is confined to `sys.rs`; everything else is safe Rust.
 #![deny(unsafe_code)]
 
+mod argv;
 mod cli;
 mod config;
 mod logging;
+mod marks;
 mod matching;
 mod paste;
 mod pty;

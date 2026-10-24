@@ -31,6 +31,7 @@ The format is frozen at **`config_version = 2`**:
 | `config_version` | integer | 2 | Format version; missing means 0 (before 0.5) |
 | `shell` | string | `""` | Absolute path of the program to run; empty = login shell |
 | `login_shell` | bool | false | Start the shell as a login shell |
+| `command` | array of strings | `[]` | Program and arguments to run instead of the shell (0.9.5); found on `$PATH`, started directly; empty = the shell |
 | `close_on_exit` | `"always"`, `"never"`, `"clean"` | `"clean"` | Close the tab when the program exits |
 | `log_type` | `"none"`, `"printable"`, `"all"` | `"none"` | Session logging |
 | `log_file` | string | `"~/moriartty-&Y&M&D-&T.log"` | Absolute path; `&Y &M &D &T &&` placeholders |
@@ -49,6 +50,7 @@ The format is frozen at **`config_version = 2`**:
 | `no_remote_wintitle` | bool | false | Ignore titles set by programs |
 | `allow_hyperlinks` | bool | false | OSC 8 hyperlinks |
 | `clickable_urls` | bool | true | Ctrl+click opens http(s) links |
+| `notify_command_secs` | integer 0–86400 | 10 | With shell integration: notify when a command that ran this long ends in a background tab; 0 = never (0.9.5) |
 | `columns` | integer 1–1000 | 80 | Initial width |
 | `rows` | integer 1–500 | 24 | Initial height |
 | `scrollback` | integer 0–1000000 | 10000 | Lines of scrollback |
@@ -74,10 +76,30 @@ The format is frozen at **`config_version = 2`**:
 | `bold_as_colour` | bool | true | Bold text in a brighter colour |
 | `auto_colours` | bool | true | Moriartty Dark/Light following the desktop |
 | `colours` | table | Moriartty Dark | Used when `auto_colours` is false |
+| `keys` | table | empty | Changed keyboard shortcuts (0.9.5) |
 
 `colours` has `foreground`, `bold_foreground`, `background`, `cursor_text`
 and `cursor`, each `[r, g, b]` (0–255), and `ansi`, sixteen `[r, g, b]`
 entries: 0–7 normal, 8–15 bright.
+
+`keys` maps an action to a list of keys; an empty list turns the shortcut
+off, and actions not listed keep their defaults. It is only written when it
+is not empty. Example:
+
+```toml
+[keys]
+find = ["Ctrl+Shift+F", "F3"]
+fullscreen = ["F11"]
+copy = []
+```
+
+Actions: `copy`, `paste`, `find`, `settings`, `zoom-in`, `zoom-out`,
+`zoom-reset`, `fullscreen`, `previous-prompt`, `next-prompt`, `new-tab`,
+`close-tab`, `new-window`, `sessions`, `previous-tab`, `next-tab`,
+`move-tab-left`, `move-tab-right`, `tab-1` … `tab-9`. Keys are modifiers
+(`Ctrl`, `Shift`, `Alt`, `Super`) and one key: a character or a GDK key
+name (`Page_Up` or `PageUp`, `Return`, `F11`, `plus`, `comma`, ...).
+Unknown actions and keys that can't be read are reported and skipped.
 
 ## History
 

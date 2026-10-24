@@ -212,13 +212,17 @@ enum LoadError {
 fn try_load(name: &str) -> Result<Settings, LoadError> {
     let path = session_path(name).map_err(LoadError::Read)?;
     if name == DEFAULT_SESSION && fs::symlink_metadata(&path).is_err() {
-        return Ok(Settings::default());
+        return Ok(Settings {
+            session: Some(name.to_string()),
+            ..Settings::default()
+        });
     }
     let text = read_private_file(&path).map_err(LoadError::Read)?;
     let mut s: Settings = toml::from_str(&text)
         .map_err(|e| LoadError::Parse(path.clone(), format!("{}: {e}", path.display())))?;
     s.migrate();
     s.sanitize();
+    s.session = Some(name.to_string());
     Ok(s)
 }
 

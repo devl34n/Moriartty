@@ -74,6 +74,10 @@ install -Dm0644 packaging/completions/_moriartty \
     "$ROOT/usr/share/zsh/vendor-completions/_moriartty"
 install -Dm0644 packaging/completions/moriartty.fish \
     "$ROOT/usr/share/fish/vendor_completions.d/moriartty.fish"
+for sh in bash zsh fish; do
+    install -Dm0644 "packaging/shell-integration/moriartty.$sh" \
+        "$ROOT/usr/share/moriartty/shell-integration/moriartty.$sh"
+done
 
 DOC="$ROOT/usr/share/doc/$NAME"
 install -d "$DOC"

@@ -2,7 +2,7 @@
 //! it the current tab's VTE widget, attached to a shell on a pty.
 //!
 //! Data flow (per tab)
-//!   pty --read--> log --> vte.feed()
+//!   pty --read--> log --> shell integration marks (read only) --> vte.feed()
 //!   vte "commit" (keys, paste, terminal replies) --> output queue --> pty
 //!
 //! Rule for the RefCells below: never call into VTE (feed, paste_text, ...)
@@ -22,9 +22,11 @@ use vte::prelude::*;
 
 use super::config_dialog::{self, Mode};
 use super::form::rgba;
+use super::keys::{Action, Keymap};
 use super::{ask, strip_controls, style};
 use crate::config::*;
 use crate::logging::{self, SessionLog};
+use crate::marks::{Mark, Scanner};
 use crate::matching::{self, PCRE2_CASELESS, PCRE2_MULTILINE, PCRE2_UTF};
 use crate::paste::{is_invisible, paste_preview, sanitize_paste};
 use crate::pty::{self, ExitState, Pty, ReadStatus};
@@ -55,7 +57,14 @@ pub struct TermWindow {
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     search_case: gtk::CheckButton,
+    /// The saved sessions, shared by every menu that lists them and read
+    /// again each time one of those menus opens.
+    sessions_menu: gio::Menu,
+    /// The ▾ next to the + button.
+    sessions_btn: gtk::MenuButton,
     settings: Rc<RefCell<Settings>>,
+    /// Keyboard shortcuts, from `settings` (see `rebuild_keymap`).
+    keymap: RefCell<Keymap>,
     /// In tab order, matching `strip`.
     tabs: RefCell<Vec<Rc<Tab>>>,
     force_close: Cell<bool>,
@@ -113,6 +122,17 @@ pub struct Tab {
     remote_title: RefCell<Option<String>>,
     /// "program: directory", used when the program sets no title.
     auto_title: RefCell<Option<String>>,
+    /// Shell integration: reads the shell's marks in the output.
+    marks: RefCell<Scanner>,
+    /// Rows (absolute, as VTE counts them) of earlier prompts, oldest first.
+    prompt_rows: RefCell<VecDeque<i64>>,
+    /// A prompt is shown and not yet answered with Enter. VTE draws output
+    /// after `feed` returns, so its row is read when the screen changes
+    /// (`prompt_row`) and kept once Enter is pressed (`commit_prompt`).
+    prompt_open: Cell<bool>,
+    prompt_row: Cell<Option<i64>>,
+    /// When the command now running started, as the shell reported it.
+    command_started: Cell<Option<Instant>>,
 }
 
 thread_local! {
@@ -148,6 +168,8 @@ const MAX_OUTQ: usize = 16 << 20;
 /// the shell in the foreground.
 const TITLE_REFRESH: Duration = Duration::from_millis(400);
 const MAX_EVENTS: usize = 1000;
+/// Prompts remembered per tab for jumping between them.
+const MAX_PROMPTS: usize = 10_000;
 /// Copy All asks first above this many lines of scrollback.
 const COPY_ALL_ASK_LINES: u64 = 1000;
 
@@ -233,7 +255,24 @@ fn load_chrome_css() {
     );
 }
 
-fn build_menu() -> gio::Menu {
+/// The saved sessions, for the menus that list them. Read each time such a
+/// menu opens, so sessions saved meanwhile (in any window) show up.
+fn fill_sessions_menu(menu: &gio::Menu) {
+    let list = gio::Menu::new();
+    for name in storage::list_sessions() {
+        // Menu labels take "_" as a mnemonic marker.
+        let item = gio::MenuItem::new(Some(&name.replace('_', "__")), None);
+        item.set_action_and_target_value(Some("win.open-session"), Some(&name.to_variant()));
+        list.append_item(&item);
+    }
+    let manage = gio::Menu::new();
+    manage.append(Some("_Manage Saved Sessions…"), Some("win.change-settings"));
+    menu.remove_all();
+    menu.append_section(None, &list);
+    menu.append_section(None, &manage);
+}
+
+fn build_menu(sessions: &gio::Menu) -> gio::Menu {
     let menu = gio::Menu::new();
 
     let edit = gio::Menu::new();
@@ -252,6 +291,7 @@ fn build_menu() -> gio::Menu {
     let session = gio::Menu::new();
     session.append(Some("New _Tab"), Some("win.new-tab"));
     session.append(Some("Ne_w Window"), Some("win.new-window"));
+    session.append_submenu(Some("Sa_ved Sessions"), sessions);
     session.append(Some("Clos_e Tab"), Some("win.close-tab"));
     session.append(Some("_Restart Shell"), Some("win.restart"));
     session.append(Some("_Settings…"), Some("win.change-settings"));
@@ -286,13 +326,14 @@ fn css_rgb(c: Rgb) -> String {
     format!("rgb({},{},{})", c[0], c[1], c[2])
 }
 
-/// Alt+1 … Alt+9: the tab index to go to.
-fn alt_digit(key: gdk::Key, ctrl: bool, shift: bool, alt: bool) -> Option<usize> {
-    if !alt || ctrl || shift {
-        return None;
+/// "2 min 13 s", for how long a command ran.
+fn duration_text(d: Duration) -> String {
+    let s = d.as_secs();
+    match (s / 3600, s / 60 % 60, s % 60) {
+        (0, 0, s) => format!("{s} s"),
+        (0, m, s) => format!("{m} min {s} s"),
+        (h, m, _) => format!("{h} h {m} min"),
     }
-    let d = key.to_unicode()?.to_digit(10)?;
-    (1..=9).contains(&d).then(|| d as usize - 1)
 }
 
 /// MORIARTTY_DEBUG: the text colour a menu really got, once it is on
@@ -335,10 +376,11 @@ pub fn open(
     cwd: Option<PathBuf>,
 ) {
     let tw = TermWindow::new(app, settings);
+    let key_problems = tw.rebuild_keymap();
     let tab = tw.add_tab(command, cwd);
     // Problems found while loading the saved settings, e.g. a broken
-    // Default Settings file that was moved aside.
-    for n in storage::take_notices() {
+    // Default Settings file that was moved aside, or a bad shortcut.
+    for n in storage::take_notices().into_iter().chain(key_problems) {
         tab.log_event(&n);
         tab.feed_status(&n);
     }
@@ -379,16 +421,30 @@ impl TermWindow {
         });
         strip_scroll.add_controller(wheel);
         let add_btn = bar_button("list-add-symbolic", "win.new-tab", "New tab (Ctrl+Shift+T)");
+        // ▾ next to +: open a saved session (in a new window, with all of
+        // its settings: its colours and the command it runs).
+        let sessions_menu = gio::Menu::new();
+        fill_sessions_menu(&sessions_menu);
+        let sessions_btn = gtk::MenuButton::new();
+        sessions_btn.set_icon_name("pan-down-symbolic");
+        sessions_btn.set_has_frame(false);
+        sessions_btn.set_focus_on_click(false);
+        sessions_btn.set_menu_model(Some(&sessions_menu));
+        sessions_btn.set_tooltip_text(Some("Open a saved session (Ctrl+Shift+S)"));
         let filler = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         filler.set_hexpand(true);
 
         let menu_btn = gtk::MenuButton::new();
         menu_btn.set_icon_name("open-menu-symbolic");
         menu_btn.set_has_frame(false);
-        menu_btn.set_menu_model(Some(&build_menu()));
+        menu_btn.set_menu_model(Some(&build_menu(&sessions_menu)));
         menu_btn.set_tooltip_text(Some("Menu (also Ctrl+Right-click)"));
-        if let Some(p) = menu_btn.popover() {
-            debug_menu_colours(&p, "title bar");
+        for (btn, which) in [(&sessions_btn, "sessions"), (&menu_btn, "title bar")] {
+            if let Some(p) = btn.popover() {
+                let m = sessions_menu.clone();
+                p.connect_show(move |_| fill_sessions_menu(&m));
+                debug_menu_colours(&p, which);
+            }
         }
         let settings_btn = bar_button(
             "preferences-system-symbolic",
@@ -404,6 +460,7 @@ impl TermWindow {
         bar.append(&gtk::WindowControls::new(gtk::PackType::Start));
         bar.append(&strip_scroll);
         bar.append(&add_btn);
+        bar.append(&sessions_btn);
         bar.append(&filler);
         bar.append(&title_buttons);
         bar.append(&gtk::WindowControls::new(gtk::PackType::End));
@@ -469,7 +526,10 @@ impl TermWindow {
             search_bar,
             search_entry,
             search_case,
+            sessions_menu,
+            sessions_btn,
             settings: Rc::new(RefCell::new(settings)),
+            keymap: RefCell::new(Keymap::default()),
             tabs: RefCell::new(Vec::new()),
             force_close: Cell::new(false),
         });
@@ -793,51 +853,58 @@ impl TermWindow {
         }
     }
 
+    /// Rebuild the keyboard shortcuts from the settings. Returns the
+    /// problems found; bad entries are skipped, never fatal.
+    fn rebuild_keymap(&self) -> Vec<String> {
+        let (map, problems) = {
+            let s = self.settings.borrow();
+            Keymap::new(&s.keys, s.fullscreen_on_alt_enter)
+        };
+        *self.keymap.borrow_mut() = map;
+        problems
+    }
+
     /// Tab and window shortcuts. Handled for the whole window, so they work
     /// wherever the keyboard focus is (terminal, find bar, ...). The
     /// switching keys are only taken with two or more tabs, so in a
     /// single-tab window Ctrl+PgUp, Ctrl+Tab and Alt+digit still reach
-    /// programs like vim and readline.
+    /// programs like vim and readline. The terminal's own shortcuts (copy,
+    /// zoom, ...) are left to the tab.
     fn tab_shortcut(self: &Rc<Self>, key: gdk::Key, state: gdk::ModifierType) -> bool {
-        let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
-        let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
-        let alt = state.contains(gdk::ModifierType::ALT_MASK);
-        let many_tabs = self.tab_count() > 1;
-        let k = key.to_lower();
-        if ctrl && shift && !alt && k == gdk::Key::t {
-            self.new_tab();
-        } else if ctrl && shift && !alt && k == gdk::Key::w {
-            if let Some(tab) = self.current_tab() {
-                self.close_tab(&tab);
-            }
-        } else if ctrl && shift && !alt && k == gdk::Key::n {
-            self.new_window();
-        } else if ctrl
-            && !alt
-            && many_tabs
-            && (key == gdk::Key::Page_Up || key == gdk::Key::Page_Down)
-        {
-            let forward = key == gdk::Key::Page_Down;
-            if shift {
-                if let Some(tab) = self.current_tab() {
-                    self.move_tab(&tab, forward);
-                }
-            } else {
-                self.cycle_tab(forward);
-            }
-        } else if ctrl
-            && !alt
-            && many_tabs
-            && (key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab)
-        {
-            self.cycle_tab(!shift);
-        } else if let Some(tab) = alt_digit(key, ctrl, shift, alt)
-            .filter(|_| many_tabs)
-            .and_then(|n| self.tabs_snapshot().get(n).cloned())
-        {
-            self.select_tab(&tab);
-        } else {
+        let Some(action) = self.keymap.borrow().lookup(key, state) else {
             return false;
+        };
+        let many_tabs = self.tab_count() > 1;
+        match action {
+            Action::NewTab => self.new_tab(),
+            Action::CloseTab => {
+                if let Some(tab) = self.current_tab() {
+                    self.close_tab(&tab);
+                }
+            }
+            Action::NewWindow => self.new_window(),
+            Action::Sessions => self.sessions_btn.popup(),
+            Action::PreviousTab
+            | Action::NextTab
+            | Action::MoveTabLeft
+            | Action::MoveTabRight
+            | Action::GoToTab(_)
+                if !many_tabs =>
+            {
+                return false
+            }
+            Action::PreviousTab => self.cycle_tab(false),
+            Action::NextTab => self.cycle_tab(true),
+            Action::MoveTabLeft | Action::MoveTabRight => {
+                if let Some(tab) = self.current_tab() {
+                    self.move_tab(&tab, action == Action::MoveTabRight);
+                }
+            }
+            Action::GoToTab(n) => match self.tabs_snapshot().get(n) {
+                Some(tab) => self.select_tab(tab),
+                None => return false,
+            },
+            _ => return false,
         }
         true
     }
@@ -1083,7 +1150,19 @@ impl TermWindow {
             t.term.set_scrollback_lines(0);
             t.term.set_scrollback_lines(i64::from(n));
         });
-        self.add_tab_action("reset", |t| t.term.reset(true, false));
+        self.add_tab_action("reset", |t| {
+            t.term.reset(true, false);
+            t.forget_prompts();
+        });
+        // A saved session from the sessions menu; the name is the target.
+        let open_session = gio::SimpleAction::new("open-session", Some(glib::VariantTy::STRING));
+        let w = Rc::downgrade(self);
+        open_session.connect_activate(move |_, name| {
+            if let (Some(tw), Some(name)) = (w.upgrade(), name.and_then(|v| v.get::<String>())) {
+                tw.open_session(&name);
+            }
+        });
+        self.window.add_action(&open_session);
         self.add_tab_action("event-log", |t| t.show_event_log());
         self.add_tab_action("restart", |t| t.restart());
         self.add_action("find", |tw| tw.show_search());
@@ -1183,14 +1262,27 @@ impl TermWindow {
         self.add_tab(None, cwd);
     }
 
+    /// A saved session, in a new window: settings belong to a window, so
+    /// the session's colours and command apply in full, as in PuTTY.
+    fn open_session(&self, name: &str) {
+        match storage::load_session(name) {
+            Ok(s) => open(&self.app, s, None, self.current_cwd()),
+            Err(e) => super::message(&self.window, "Could not open the session", &e),
+        }
+    }
+
     fn reconfigure(&self, new: Settings) {
         *self.settings.borrow_mut() = new;
         self.apply_window_settings();
+        let key_problems = self.rebuild_keymap();
         for tab in self.tabs_snapshot() {
             tab.apply_appearance();
             tab.check_size_after_layout();
             tab.update_title();
-            tab.log_event("Settings changed (shell and logging changes apply on restart)");
+            tab.log_event("Settings changed (shell, command and logging changes apply on restart)");
+            for p in &key_problems {
+                tab.log_event(p);
+            }
         }
     }
 }
@@ -1282,7 +1374,7 @@ impl Tab {
         header.append(&label);
         header.append(&close_btn);
 
-        let popover = gtk::PopoverMenu::from_model(Some(&build_menu()));
+        let popover = gtk::PopoverMenu::from_model(Some(&build_menu(&win.sessions_menu)));
         popover.set_parent(&term);
         popover.set_has_arrow(false);
         popover.set_halign(gtk::Align::Start);
@@ -1324,6 +1416,11 @@ impl Tab {
             attention: Cell::new(false),
             remote_title: RefCell::new(None),
             auto_title: RefCell::new(None),
+            marks: RefCell::new(Scanner::default()),
+            prompt_rows: RefCell::new(VecDeque::new()),
+            prompt_open: Cell::new(false),
+            prompt_row: Cell::new(None),
+            command_started: Cell::new(None),
         });
         tab.apply_appearance();
         tab.update_title();
@@ -1741,6 +1838,17 @@ impl Tab {
             }
         });
 
+        // VTE has drawn more output: while a prompt is shown, that is where
+        // the prompt is.
+        let w = weak.clone();
+        self.term.connect_contents_changed(move |t| {
+            if let Some(tab) = w.upgrade() {
+                if tab.prompt_open.get() {
+                    tab.prompt_row.set(Some(t.cursor_position().1));
+                }
+            }
+        });
+
         // Pointer position, for placing the context menu and link tooltips.
         let motion = gtk::EventControllerMotion::new();
         let w = weak.clone();
@@ -1822,9 +1930,9 @@ impl Tab {
         });
         self.term.add_controller(legacy);
 
-        // Terminal shortcuts (PuTTY: Shift+Ins / Ctrl+Ins; Linux:
-        // Ctrl+Shift+C/V/F/P; zoom: Ctrl+= / Ctrl+- / Ctrl+0). Tab and window
-        // shortcuts are handled by the window (TermWindow::tab_shortcut).
+        // Terminal shortcuts (copy, paste, find, zoom, prompts, ... see
+        // keys::ACTIONS). Tab and window shortcuts are handled by the window
+        // (TermWindow::tab_shortcut), which sees every key first.
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let w = weak.clone();
@@ -1835,44 +1943,53 @@ impl Tab {
             let Some(win) = tab.win.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
-            let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
-            let alt = state.contains(gdk::ModifierType::ALT_MASK);
-            let k = key.to_lower();
-            if ctrl && shift && k == gdk::Key::c {
-                tab.copy();
-            } else if ctrl && shift && k == gdk::Key::v {
-                tab.paste(false);
-            } else if ctrl && shift && k == gdk::Key::p {
-                let _ = WidgetExt::activate_action(&tab.window, "win.change-settings", None);
-            } else if ctrl && shift && k == gdk::Key::f {
-                win.show_search();
-            } else if ctrl
-                && !alt
-                && (key == gdk::Key::plus || key == gdk::Key::equal || key == gdk::Key::KP_Add)
-            {
-                win.zoom(1);
-            } else if ctrl
-                && !alt
-                && !shift
-                && (key == gdk::Key::minus || key == gdk::Key::KP_Subtract)
-            {
-                win.zoom(-1);
-            } else if ctrl && !alt && !shift && (key == gdk::Key::_0 || key == gdk::Key::KP_0) {
-                win.zoom(0);
-            } else if shift && !ctrl && key == gdk::Key::Insert {
-                tab.paste(false);
-            } else if ctrl && !shift && key == gdk::Key::Insert {
-                tab.copy();
-            } else if alt
-                && (key == gdk::Key::Return || key == gdk::Key::KP_Enter)
-                && tab.settings.borrow().fullscreen_on_alt_enter
-            {
-                win.toggle_fullscreen();
-            } else {
+            let Some(action) = win.keymap.borrow().lookup(key, state) else {
                 return glib::Propagation::Proceed;
+            };
+            let handled = match action {
+                Action::Copy => {
+                    tab.copy();
+                    true
+                }
+                Action::Paste => {
+                    tab.paste(false);
+                    true
+                }
+                Action::Settings => {
+                    let _ = WidgetExt::activate_action(&tab.window, "win.change-settings", None);
+                    true
+                }
+                Action::Find => {
+                    win.show_search();
+                    true
+                }
+                Action::ZoomIn => {
+                    win.zoom(1);
+                    true
+                }
+                Action::ZoomOut => {
+                    win.zoom(-1);
+                    true
+                }
+                Action::ZoomReset => {
+                    win.zoom(0);
+                    true
+                }
+                Action::Fullscreen => {
+                    win.toggle_fullscreen();
+                    true
+                }
+                // Without shell integration there are no prompts to jump
+                // to, and the key goes to the program.
+                Action::PreviousPrompt => tab.jump_to_prompt(true),
+                Action::NextPrompt => tab.jump_to_prompt(false),
+                _ => false,
+            };
+            if handled {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
             }
-            glib::Propagation::Stop
         });
         self.term.add_controller(keys);
     }
@@ -2040,9 +2157,11 @@ impl Tab {
         }
 
         let (cols, rows) = self.term_size();
+        // `-e` wins over the saved session's command, which wins over the shell.
+        let command = self.command.clone().or_else(|| s.session_command());
         let spawned = pty::spawn(
             &s,
-            self.command.as_deref(),
+            command.as_deref(),
             self.start_dir.as_deref(),
             cols,
             rows,
@@ -2088,10 +2207,14 @@ impl Tab {
 
     fn check_size(&self) {
         let size = self.term_size();
-        if size == self.last_size.get() {
+        let last = self.last_size.replace(size);
+        if size == last {
             return;
         }
-        self.last_size.set(size);
+        // VTE rewraps the lines for a new width, which moves every row.
+        if size.0 != last.0 {
+            self.forget_prompts();
+        }
         if let Some(sess) = self.session.borrow_mut().as_mut() {
             sess.pty.resize(size.0, size.1);
         }
@@ -2128,7 +2251,7 @@ impl Tab {
                     super::since_start_ms()
                 ));
             }
-            self.term.feed(&data);
+            self.feed_output(&data);
             self.schedule_title_refresh();
         }
         match status {
@@ -2166,9 +2289,146 @@ impl Tab {
             self.log_event("Output queue full; input discarded");
         }
         self.flush();
-        // Enter may start a program: the tab's name may be about to change.
+        // Enter may start a program: the tab's name may be about to change,
+        // and the prompt it answers is where it is now.
         if bytes.contains(&b'\r') {
+            self.commit_prompt();
             self.schedule_title_refresh();
+        }
+    }
+
+    // ------------------------------------------------------ shell integration
+
+    /// Hand the program's output to VTE, acting on the shell's marks in it
+    /// (see `marks`) as they come.
+    fn feed_output(&self, data: &[u8]) {
+        let found = self.marks.borrow_mut().scan(data);
+        let mut done = 0;
+        for (end, mark) in found {
+            self.term.feed(&data[done..end]);
+            done = end;
+            self.on_mark(mark);
+        }
+        self.term.feed(&data[done..]);
+    }
+
+    fn on_mark(&self, mark: Mark) {
+        match mark {
+            Mark::Prompt => {
+                self.commit_prompt();
+                self.prompt_open.set(true);
+            }
+            Mark::CommandStart => {
+                self.commit_prompt();
+                self.command_started.set(Some(Instant::now()));
+            }
+            // Only after a CommandStart: an empty Enter, or a mark some
+            // program printed on its own, is no command.
+            Mark::CommandEnd(status) => {
+                if let Some(t0) = self.command_started.take() {
+                    self.command_finished(t0.elapsed(), status);
+                }
+            }
+        }
+    }
+
+    /// Keep the row of the prompt being shown, if VTE has drawn it.
+    fn commit_prompt(&self) {
+        if !self.prompt_open.replace(false) {
+            return;
+        }
+        let Some(row) = self.prompt_row.take() else {
+            return;
+        };
+        let mut rows = self.prompt_rows.borrow_mut();
+        // Rows only grow; after a reset they start again at the top.
+        while rows.back().is_some_and(|&r| r >= row) {
+            rows.pop_back();
+        }
+        rows.push_back(row);
+        if rows.len() > MAX_PROMPTS {
+            rows.pop_front();
+        }
+    }
+
+    /// The rows are no longer right (reset, restart, new width).
+    fn forget_prompts(&self) {
+        self.prompt_rows.borrow_mut().clear();
+        self.prompt_open.set(false);
+        self.prompt_row.set(None);
+    }
+
+    /// Scroll to the previous (`older`) or next prompt. False when there is
+    /// none to go to, so the key goes to the program instead.
+    fn jump_to_prompt(&self, older: bool) -> bool {
+        let Some(adj) = self.term.vadjustment() else {
+            return false;
+        };
+        let (lower, top) = (adj.lower(), adj.value());
+        let bottom = (adj.upper() - adj.page_size()).max(lower);
+        let target = {
+            let mut rows = self.prompt_rows.borrow_mut();
+            // Rows that left the scrollback are gone.
+            while rows.front().is_some_and(|&r| (r as f64) < lower) {
+                rows.pop_front();
+            }
+            if rows.is_empty() {
+                return false;
+            }
+            // One line above the prompt stays in view: the end of the
+            // output before it, or the first line of a two-line prompt.
+            let at = |r: i64| ((r - 1) as f64).clamp(lower, bottom);
+            if older {
+                rows.iter().rev().map(|&r| at(r)).find(|&p| p < top - 0.5)
+            } else {
+                rows.iter()
+                    .map(|&r| at(r))
+                    .find(|&p| p > top + 0.5)
+                    .or((top < bottom - 0.5).then_some(bottom))
+            }
+        };
+        match target {
+            Some(p) => {
+                adj.set_value(p);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A command the shell reported has ended. If it ran long and the tab
+    /// is not in front, say so: the tab's name turns bold, and the desktop
+    /// shows a notice. The notice names the tab by number and gives the
+    /// exit status, never the command, its output or the tab's title.
+    fn command_finished(&self, took: Duration, status: Option<i32>) {
+        let secs = self.settings.borrow().notify_command_secs;
+        if secs == 0 || took < Duration::from_secs(u64::from(secs)) {
+            return;
+        }
+        let Some(win) = self.win.upgrade() else {
+            return;
+        };
+        let current = win.is_current(self);
+        if current && self.window.is_active() {
+            return;
+        }
+        if !current && !self.attention.get() {
+            self.attention.set(true);
+            self.update_label();
+        }
+        let n = win.tab_index(self).map_or(1, |i| i + 1);
+        let how = match status {
+            Some(0) => "succeeded".to_string(),
+            Some(c) => format!("failed with status {c}"),
+            None => "finished".to_string(),
+        };
+        let body = format!("A command in tab {n} {how} after {}.", duration_text(took));
+        self.log_event(&body);
+        // Notifications go over D-Bus; without a connection there is none.
+        if win.app.dbus_connection().is_some() {
+            let note = gio::Notification::new("Command finished");
+            note.set_body(Some(&body));
+            win.app.send_notification(Some("command-finished"), &note);
         }
     }
 
@@ -2298,6 +2558,8 @@ impl Tab {
         self.auto_title.borrow_mut().take();
         self.update_title();
         self.term.reset(true, false);
+        self.forget_prompts();
+        self.command_started.set(None);
         glib::spawn_future_local(self.clone().start());
     }
 
@@ -2469,6 +2731,9 @@ impl Tab {
     }
 
     fn show_menu(&self) {
+        if let Some(win) = self.win.upgrade() {
+            fill_sessions_menu(&win.sessions_menu);
+        }
         let (x, y) = self.pointer.get();
         self.popover
             .set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
@@ -2514,12 +2779,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn alt_digits() {
-        assert_eq!(alt_digit(gdk::Key::_1, false, false, true), Some(0));
-        assert_eq!(alt_digit(gdk::Key::_9, false, false, true), Some(8));
-        assert_eq!(alt_digit(gdk::Key::_0, false, false, true), None);
-        assert_eq!(alt_digit(gdk::Key::_1, false, false, false), None);
-        assert_eq!(alt_digit(gdk::Key::_1, true, false, true), None);
-        assert_eq!(alt_digit(gdk::Key::a, false, false, true), None);
+    fn durations() {
+        assert_eq!(duration_text(Duration::from_secs(12)), "12 s");
+        assert_eq!(duration_text(Duration::from_secs(133)), "2 min 13 s");
+        assert_eq!(
+            duration_text(Duration::from_secs(3 * 3600 + 125)),
+            "3 h 2 min"
+        );
     }
 }

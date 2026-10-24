@@ -1,13 +1,21 @@
 //! The PuTTY/pterm-style settings window: category tree on the left, option
 //! pages on the right, saved sessions on the Session page.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
 
 use super::form::{group, note, page, Form};
+use super::keys;
 use crate::config::*;
-use crate::{storage, ui};
+use crate::{argv, storage, ui};
+
+/// Everything the settings window checks before using or saving settings.
+fn check(s: &Settings) -> Result<(), String> {
+    s.validate()?;
+    keys::check(&s.keys)
+}
 
 /// Shows settings in the terminal without applying them.
 pub type Preview = Rc<dyn Fn(&Settings)>;
@@ -25,7 +33,9 @@ pub enum Mode {
 
 struct Ctx {
     window: gtk::ApplicationWindow,
-    open: Rc<dyn Fn()>,
+    /// The session highlighted in the Session page's list: Apply (or Open)
+    /// saves the settings to it. None saves nowhere.
+    selected: Rc<RefCell<Option<String>>>,
     reconfig: bool,
 }
 
@@ -50,11 +60,7 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .icon_name(crate::APP_ID)
-        .title(if reconfig {
-            "Moriartty Reconfiguration"
-        } else {
-            "Moriartty Configuration"
-        })
+        .title("Moriartty Configuration")
         .default_width(780)
         .default_height(620)
         .build();
@@ -83,6 +89,14 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
             gtk::glib::Propagation::Proceed
         });
     }
+    // The window's own session is highlighted to begin with, so Apply saves
+    // back to where its settings came from.
+    let selected = Rc::new(RefCell::new(Some(
+        initial
+            .session
+            .clone()
+            .unwrap_or_else(|| storage::DEFAULT_SESSION.to_string()),
+    )));
     let form = Form::new(initial);
     {
         let form = form.clone();
@@ -107,34 +121,31 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
         });
     }
 
-    // Without this, changes only affect the current window and are gone in
-    // the next one — which looks like a bug to anyone who isn't a PuTTY user.
-    let save_default = gtk::CheckButton::with_label("Save as Default Settings");
-    save_default.set_active(true);
-    save_default.set_tooltip_text(Some(
-        "Also use these settings for every new Moriartty window",
-    ));
-
+    // Apply (Open) uses the settings and saves them to the highlighted
+    // session, so they are still there in the next window.
     let open: Rc<dyn Fn()> = {
         let form = form.clone();
         let window = window.clone();
         let app = app.clone();
-        let save_default = save_default.clone();
+        let selected = selected.clone();
         let applied = applied.clone();
         Rc::new(move || {
             ui::debug("settings: apply");
             let mut s = form.get();
             s.sanitize();
-            if let Err(e) = s.validate() {
+            if let Err(e) = check(&s) {
                 ui::debug(format!("settings: invalid: {e}"));
                 ui::message(&window, "Invalid settings", &e);
                 return;
             }
-            let saved = if save_default.is_active() {
-                storage::save_session(storage::DEFAULT_SESSION, &s)
-            } else {
-                Ok(())
+            let target = selected.borrow().clone();
+            let saved = match &target {
+                Some(name) => storage::save_session(name, &s),
+                None => Ok(()),
             };
+            if target.is_some() {
+                s.session = target;
+            }
             applied.set(true);
             match &mode {
                 Mode::New => ui::terminal::open(&app, s, None, None),
@@ -160,7 +171,7 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
 
     let ctx = Ctx {
         window: window.clone(),
-        open: open.clone(),
+        selected,
         reconfig,
     };
 
@@ -213,9 +224,7 @@ pub fn show(app: &gtk::Application, initial: Settings, mode: Mode) -> gtk::Appli
     body.append(&stack);
 
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    save_default.set_hexpand(true);
-    save_default.set_halign(gtk::Align::Start);
-    buttons.append(&save_default);
+    buttons.set_halign(gtk::Align::End);
     let cancel = gtk::Button::with_label("Cancel");
     let open_btn = gtk::Button::with_label(if reconfig { "Apply" } else { "Open" });
     open_btn.add_css_class("suggested-action");
@@ -269,6 +278,19 @@ fn row_name(row: &gtk::ListBoxRow) -> Option<String> {
         .map(|l| l.text().to_string())
 }
 
+/// Highlight the session called `name`; false if it isn't in the list.
+fn select_named(list: &gtk::ListBox, name: &str) -> bool {
+    let mut i = 0;
+    while let Some(row) = list.row_at_index(i) {
+        if row_name(&row).as_deref() == Some(name) {
+            list.select_row(Some(&row));
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 fn load_into(form: &Form, window: &gtk::ApplicationWindow, name: &str) -> bool {
     match storage::load_session(name) {
         Ok(s) => {
@@ -299,15 +321,36 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
         |s| s.login_shell,
         |s, v| s.login_shell = v,
     );
+    f.entry(
+        &g,
+        "Command to run instead (blank = the shell)",
+        |s| argv::join(&s.command),
+        |s, v| s.command = argv::split(&v),
+    )
+    .set_placeholder_text(Some("e.g. ssh admin@prod.example.com"));
+    note(
+        &g,
+        "Save a session with a command to open it in one go, from the ▾ next to the \
+         + button or with -load. It is started directly, not through a shell: quotes \
+         group words, but $variables, pipes and ; are not interpreted. New tabs and \
+         windows opened from that session run it too.",
+    );
 
     let g = group(&p, "Load, save or delete a stored session");
-    note(&g, "\"Default Settings\" is used for every new window.");
+    note(
+        &g,
+        "\"Default Settings\" is used for every new window. Apply also saves the \
+         settings to the highlighted session. Double-click a session to load it.",
+    );
     let name = gtk::Entry::new();
     name.set_placeholder_text(Some("Saved Sessions"));
     g.append(&name);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
+    // A click only highlights; loading (which replaces the settings being
+    // edited) takes a double-click or Enter.
+    list.set_activate_on_single_click(false);
     let sw = gtk::ScrolledWindow::new();
     sw.set_child(Some(&list));
     sw.set_hexpand(true);
@@ -326,29 +369,34 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
     fill_sessions(&list);
 
     {
-        let name = name.clone();
+        let (name, selected) = (name.clone(), c.selected.clone());
         list.connect_row_selected(move |_, row| {
-            if let Some(n) = row.and_then(row_name) {
-                name.set_text(&n);
+            let n = row.and_then(row_name);
+            if let Some(n) = &n {
+                name.set_text(n);
             }
+            *selected.borrow_mut() = n;
         });
     }
+    // The window's own session, if it is still there.
+    let initial = c.selected.borrow().clone();
+    if !initial.is_some_and(|n| select_named(&list, &n)) {
+        *c.selected.borrow_mut() = None;
+    }
     {
-        let (f, w, open) = (f.clone(), c.window.clone(), c.open.clone());
+        let (f, w) = (f.clone(), c.window.clone());
         list.connect_row_activated(move |_, row| {
             if let Some(n) = row_name(row) {
-                if load_into(&f, &w, &n) {
-                    open();
-                }
+                load_into(&f, &w, &n);
             }
         });
     }
     {
-        let (f, w, name) = (f.clone(), c.window.clone(), name.clone());
+        let (f, w, name, list) = (f.clone(), c.window.clone(), name.clone(), list.clone());
         load.connect_clicked(move |_| {
             let n = name.text().to_string();
-            if !n.is_empty() {
-                load_into(&f, &w, &n);
+            if !n.is_empty() && load_into(&f, &w, &n) {
+                select_named(&list, &n);
             }
         });
     }
@@ -366,18 +414,26 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
             }
             let mut s = f.get();
             s.sanitize();
-            if let Err(e) = s.validate() {
+            if let Err(e) = check(&s) {
                 ui::message(&w, "Invalid settings", &e);
                 return;
             }
             match storage::save_session(&n, &s) {
-                Ok(()) => fill_sessions(&list),
+                Ok(()) => {
+                    fill_sessions(&list);
+                    select_named(&list, &n);
+                }
                 Err(e) => ui::message(&w, "Could not save session", &e),
             }
         });
     }
     {
-        let (w, name, list) = (c.window.clone(), name.clone(), list.clone());
+        let (w, name, list, selected) = (
+            c.window.clone(),
+            name.clone(),
+            list.clone(),
+            c.selected.clone(),
+        );
         delete.connect_clicked(move |_| {
             let n = name.text().to_string();
             if n.is_empty() {
@@ -387,6 +443,8 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
                 Ok(()) => {
                     name.set_text("");
                     fill_sessions(&list);
+                    // Nothing highlighted: Apply won't bring it back.
+                    *selected.borrow_mut() = None;
                 }
                 Err(e) => ui::message(&w, "Could not delete session", &e),
             }
@@ -395,7 +453,7 @@ fn session_page(f: &Form, c: &Ctx) -> gtk::Box {
     if c.reconfig {
         note(
             &g,
-            "Changes to the shell take effect when the shell is restarted.",
+            "Changes to the shell or command take effect when the shell is restarted.",
         );
     }
 
@@ -481,13 +539,30 @@ fn keyboard_page(f: &Form, _c: &Ctx) -> gtk::Box {
         |s| s.backspace,
         |s, v| s.backspace = v,
     );
+
+    let g = group(&p, "Shortcuts");
     note(
         &g,
-        "Shortcuts: Ctrl+Shift+C / Ctrl+Insert copy, Ctrl+Shift+V / Shift+Insert paste, \
-         Ctrl+Shift+N new window, Ctrl+Shift+F find, Ctrl+Shift+P settings, \
-         Ctrl+= / Ctrl+- / Ctrl+0 zoom. Tabs: Ctrl+Shift+T new, Ctrl+Shift+W close, \
-         Ctrl+PgUp / Ctrl+PgDn or Ctrl+Tab / Ctrl+Shift+Tab switch, \
-         Ctrl+Shift+PgUp / Ctrl+Shift+PgDn move, Alt+1…9 go to.",
+        "Leave a box empty for the default keys, shown in grey. Separate several keys \
+         with commas; \"none\" turns a shortcut off. Examples: Ctrl+Shift+T, Alt+F11, \
+         Ctrl+PageUp, Ctrl+plus, Ctrl+comma.",
+    );
+    for def in keys::ACTIONS {
+        let name = def.name;
+        f.entry(
+            &g,
+            def.label,
+            move |s| keys::setting_text(s.keys.get(name).map(Vec::as_slice)),
+            move |s, v| keys::set_from_text(&mut s.keys, name, &v),
+        )
+        .set_placeholder_text(Some(&def.keys.join(", ")));
+    }
+    note(
+        &g,
+        "Tab switching keys only act with two or more tabs, and the prompt keys only \
+         once the shell marks its prompts (shell integration, see the README); \
+         otherwise the key goes to the program. Full screen's default keys only act \
+         with \"Full screen on Alt-Enter\" (Behaviour page) turned on.",
     );
     p
 }
@@ -560,6 +635,24 @@ fn features_page(f: &Form, _c: &Ctx) -> gtk::Box {
         &g,
         "Always disabled for safety: answerback (^E), window title reporting and \
          clipboard writes by programs (OSC 52).",
+    );
+
+    let g = group(&p, "Shell integration");
+    f.number(
+        &g,
+        "Tell me when a command that ran this many seconds ends in a background tab \
+         (0 = never)",
+        0,
+        86_400,
+        |s| s.notify_command_secs,
+        |s, v| s.notify_command_secs = v,
+    );
+    note(
+        &g,
+        "Needs the shell integration script for bash, zsh or fish (see the README), \
+         which also lets Ctrl+Shift+Up / Ctrl+Shift+Down jump between prompts. The \
+         tab's name turns bold and the desktop shows a notice with the tab's number \
+         and the exit status, never the command or its output.",
     );
     p
 }

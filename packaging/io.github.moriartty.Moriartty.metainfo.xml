@@ -21,9 +21,11 @@
     <ul>
       <li>Copy on select and right-click paste, on by default</li>
       <li>Safe paste: escape sequences and hidden control characters are stripped, multi-line pastes ask first</li>
-      <li>Tabs, find in scrollback, font zoom and Ctrl+click web links</li>
+      <li>Saved sessions that run a command, such as ssh to a server, opened from a drop-down next to the tabs</li>
+      <li>Shell integration: jump between prompts, and a notice when a long command ends in a background tab</li>
+      <li>Tabs, find in scrollback, font zoom, Ctrl+click web links and keyboard shortcuts you can change</li>
       <li>Moriartty Dark and Light colours that follow the desktop, plus PuTTY classic, Tango, Solarized and Dracula</li>
-      <li>Saved settings profiles and session logging</li>
+      <li>Session logging, with a visible indicator</li>
     </ul>
   </description>
 
@@ -51,6 +53,18 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.9.5" date="2026-10-24">
+      <description>
+        <p>Sessions, shell integration and your own shortcuts.</p>
+        <ul>
+          <li>A saved session can run a command instead of the shell, for example ssh to a server</li>
+          <li>Open a saved session from the drop-down next to the + button</li>
+          <li>Jump between prompts with Ctrl+Shift+Up and Ctrl+Shift+Down, with the shell integration scripts for bash, zsh and fish</li>
+          <li>A notice when a long command ends in a background tab</li>
+          <li>Every keyboard shortcut can be changed or turned off</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-10-21" type="development">
       <description>
         <p>Release candidate for 1.0.</p>

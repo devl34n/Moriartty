@@ -101,6 +101,9 @@ pub fn spawn(
     cmd.env("TERM", &s.term_type)
         .env("COLORTERM", "truecolor")
         .env("VTE_VERSION", vte_version.to_string())
+        // How the shell integration scripts know they run in Moriartty.
+        .env("TERM_PROGRAM", "moriartty")
+        .env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"))
         .env_remove("COLUMNS")
         .env_remove("LINES");
     // Meant for Moriartty itself, from the desktop that launched it; the

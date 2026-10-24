@@ -59,9 +59,10 @@ jobs:
             echo "Release $TAG exists; adding packages to it (existing files are kept)."
             gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY"
           else
-            # 0.x versions and -rc tags are pre-releases, not "latest".
+            # Only -rc tags are pre-releases; from 0.9.5 on, every other tag
+            # is a regular release and becomes "latest".
             PRE=()
-            case "$TAG" in v0.*|*-rc*) PRE=(--prerelease) ;; esac
+            case "$TAG" in *-rc*) PRE=(--prerelease) ;; esac
             gh release create "$TAG" out/* "${PRE[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \

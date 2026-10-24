@@ -2,6 +2,8 @@
 //! (Session / Terminal / Window) so a PuTTY user finds every option where
 //! they expect it.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::validate;
@@ -327,6 +329,11 @@ pub struct Settings {
     /// Program to run; empty means the user's login shell.
     pub shell: String,
     pub login_shell: bool,
+    /// Program and arguments to run instead of the shell, e.g. `["ssh",
+    /// "prod"]`; empty runs the shell. Looked up on $PATH and started
+    /// directly, never through a shell. Every tab and window opened with
+    /// these settings runs it.
+    pub command: Vec<String>,
     pub close_on_exit: CloseOnExit,
 
     // Session > Logging
@@ -355,6 +362,10 @@ pub struct Settings {
     pub no_remote_wintitle: bool,
     pub allow_hyperlinks: bool,
     pub clickable_urls: bool,
+    /// With shell integration: a command that ran at least this many
+    /// seconds and ends in a background tab marks the tab and shows a
+    /// desktop notification. 0 = never.
+    pub notify_command_secs: u32,
 
     // Window
     pub columns: u16,
@@ -399,6 +410,18 @@ pub struct Settings {
     /// is used when this is off.
     pub auto_colours: bool,
     pub colours: Colours,
+
+    // Terminal > Keyboard (a table, so it comes after every plain value)
+    /// Shortcuts the user changed: action name (see `ui::keys::ACTIONS`) →
+    /// keys such as "Ctrl+Shift+T"; an empty list turns the shortcut off.
+    /// Actions not listed keep their default keys.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, Vec<String>>,
+
+    /// The saved session these settings were loaded from or last saved
+    /// to, so the settings window can highlight it. Never written to a file.
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 impl Default for Settings {
@@ -408,6 +431,7 @@ impl Default for Settings {
 
             shell: String::new(),
             login_shell: false,
+            command: Vec::new(),
             close_on_exit: CloseOnExit::Clean,
 
             log_type: LogType::None,
@@ -431,6 +455,7 @@ impl Default for Settings {
             no_remote_wintitle: false,
             allow_hyperlinks: false,
             clickable_urls: true,
+            notify_command_secs: 10,
 
             columns: 80,
             rows: 24,
@@ -461,6 +486,10 @@ impl Default for Settings {
             bold_as_colour: true,
             auto_colours: true,
             colours: Colours::default(),
+
+            keys: BTreeMap::new(),
+
+            session: None,
         }
     }
 }
@@ -535,7 +564,17 @@ impl Settings {
         self.bell_overload_n = self.bell_overload_n.clamp(1, 1000);
         self.bell_overload_t = self.bell_overload_t.clamp(1, 3600);
         self.bell_overload_s = self.bell_overload_s.clamp(1, 3600);
+        self.notify_command_secs = self.notify_command_secs.min(86_400);
         self.shell = self.shell.trim().to_string();
+    }
+
+    /// The command to run instead of the shell, if there is one, with `~`
+    /// in the program's path expanded.
+    pub fn session_command(&self) -> Option<Vec<String>> {
+        let (prog, args) = self.command.split_first()?;
+        let mut argv = vec![validate::expand_tilde(prog).to_string_lossy().into_owned()];
+        argv.extend(args.iter().cloned());
+        Some(argv)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -543,6 +582,7 @@ impl Settings {
         if !self.shell.is_empty() {
             validate::program(&self.shell)?;
         }
+        validate::command(&self.command)?;
         if self.log_type != LogType::None {
             validate::log_path(&self.log_file).map_err(|e| format!("Log file: {e}"))?;
         }
@@ -565,6 +605,10 @@ impl Settings {
                 self.shell.clear();
             }
         }
+        if let Err(e) = validate::command(&self.command) {
+            notes.push(format!("{e}; running the shell instead"));
+            self.command.clear();
+        }
         if self.log_type != LogType::None {
             if let Err(e) = validate::log_path(&self.log_file) {
                 notes.push(format!("Log file: {e}; logging disabled"));
@@ -585,6 +629,43 @@ mod tests {
         let text = toml::to_string_pretty(&s).unwrap();
         let back: Settings = toml::from_str(&text).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn roundtrip_command_and_keys() {
+        let mut s = Settings {
+            command: vec!["ssh".into(), "admin@prod".into()],
+            notify_command_secs: 0,
+            ..Settings::default()
+        };
+        s.keys.insert("new-tab".into(), vec!["Ctrl+T".into()]);
+        s.keys.insert("find".into(), Vec::new());
+        let text = toml::to_string_pretty(&s).unwrap();
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(s, back);
+        // Untouched shortcuts are not written out at all.
+        let text = toml::to_string_pretty(&Settings::default()).unwrap();
+        assert!(!text.contains("keys"), "{text}");
+    }
+
+    #[test]
+    fn session_command() {
+        assert_eq!(Settings::default().session_command(), None);
+        let s = Settings {
+            command: vec!["ssh".into(), "~/not-expanded".into()],
+            ..Settings::default()
+        };
+        assert_eq!(
+            s.session_command().unwrap(),
+            vec!["ssh".to_string(), "~/not-expanded".to_string()]
+        );
+        let mut s = Settings {
+            command: vec!["no-such-program-moriartty".into()],
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err());
+        assert_eq!(s.repair().len(), 1);
+        assert!(s.command.is_empty());
     }
 
     #[test]

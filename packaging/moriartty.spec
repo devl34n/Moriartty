@@ -1,5 +1,5 @@
 Name:           moriartty
-Version:        0.9.0
+Version:        0.9.5
 Release:        1%{?dist}
 Summary:        Private-by-default terminal for Linux, inspired by PuTTY
 License:        MIT
@@ -67,6 +67,10 @@ install -Dpm0644 packaging/completions/_moriartty \
     %{buildroot}%{_datadir}/zsh/site-functions/_moriartty
 install -Dpm0644 packaging/completions/moriartty.fish \
     %{buildroot}%{_datadir}/fish/vendor_completions.d/moriartty.fish
+for sh in bash zsh fish; do
+    install -Dpm0644 packaging/shell-integration/moriartty.$sh \
+        %{buildroot}%{_datadir}/moriartty/shell-integration/moriartty.$sh
+done
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.moriartty.Moriartty.desktop
@@ -86,8 +90,22 @@ cargo test --release --frozen --offline
 %{_datadir}/bash-completion/completions/moriartty
 %{_datadir}/zsh/site-functions/_moriartty
 %{_datadir}/fish/vendor_completions.d/moriartty.fish
+%{_datadir}/moriartty/
 
 %changelog
+* Sat Oct 24 2026 Moriartty Developers - 0.9.5-1
+- Saved sessions can run a command (ssh prod, toolbox enter, ...) instead of
+  the shell, started directly, never through a shell
+- A drop-down next to the + button opens a saved session in a new window
+  (also Ctrl+Shift+S and the menu)
+- Shell integration for bash, zsh and fish (opt-in scripts in
+  /usr/share/moriartty/shell-integration): jump between prompts with
+  Ctrl+Shift+Up/Down, and a notice when a long command ends in a background
+  tab
+- Every keyboard shortcut can be changed or turned off (Terminal > Keyboard)
+- TERM_PROGRAM=moriartty is set for programs in the terminal
+- 0.9.5 is a regular release, not a pre-release
+
 * Wed Oct 21 2026 Moriartty Developers - 0.9.0-1
 - Release candidate for 1.0 (includes the unreleased 0.7 and 0.8 work)
 - Built with gtk-rs 0.22 (gtk4 0.11, vte4 0.10), nix 0.31 and toml 1;

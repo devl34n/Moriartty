@@ -24,6 +24,7 @@ output, a compromised remote host behind `ssh`, a log file.
 | Misleading window or tab title | Control, invisible and direction-changing characters stripped, length capped (`strip_controls`); remote titles can be turned off |
 | Misleading link (OSC 8 hyperlink, lookalike domain) | OSC 8 off by default and always asks; international hosts ask and show the `xn--` form; only http(s); user names, backslashes and invisible characters in links refused (`matching.rs`) |
 | Fake directory report (OSC 7) to make New Tab start in a hostile directory | OSC 7 only triggers a look; the directory always comes from the shell's real working directory (`/proc`) |
+| Fake shell integration marks (OSC 133) to show a misleading notification | Marks are only read, never answered; at worst they misplace a prompt jump or report a command as finished. The notice is fixed text with the tab's number and a number for the exit status: nothing from the output is shown |
 | Bell flood | Bell overload protection |
 
 ### 2. Malicious pastes
@@ -57,6 +58,7 @@ Another local user, or a program running as the user, plants files.
 | Readable settings or logs | Directory 0700, files 0600, repaired when found looser |
 | FIFO or device as a log file (hang or misuse) | Opened non-blocking, refused if not a regular file, emptied only after the checks |
 | Broken or hostile settings file locking the user out | Bad values fall back to safe ones and are reported; an unreadable Default Settings is moved aside, never overwritten |
+| A saved session's command (0.9.5) | Session files are yours alone (above), and a command only runs when you open that session; it is exec'd directly, never through a shell |
 
 ## Not defended against
 

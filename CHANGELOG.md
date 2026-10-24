@@ -3,6 +3,45 @@
 All notable changes to Moriartty. The packages carry the same notes
 (`packaging/moriartty.spec`, AppStream metadata).
 
+## 0.9.5 — 2026-10-24
+
+The first regular (non pre-release) release.
+
+Sessions
+- A saved session can run a command instead of the shell (Session page:
+  "Command to run instead"), e.g. `ssh admin@prod.example.com` or
+  `toolbox enter dev`. It is started directly, never through a shell; a
+  command that can't be found falls back to the shell with a notice. `-e`
+  still wins over it.
+- A ▾ next to the + button, Ctrl+Shift+S and the menu's Saved Sessions list
+  the saved sessions; picking one opens it in a new window with all of its
+  settings (colours included).
+- Settings window: the "Save as Default Settings" tick is gone. Apply saves
+  to the session highlighted on the Session page, which starts as the
+  window's own session (or Default Settings). Clicking a session only
+  highlights it; double-click loads it into the form, without applying or
+  closing. The window is always titled "Moriartty Configuration".
+
+Shell integration
+- Scripts for bash, zsh and fish (`/usr/share/moriartty/shell-integration/`,
+  opt-in: source one from your shell's startup file) mark prompts and
+  commands with OSC 133.
+- Ctrl+Shift+Up / Ctrl+Shift+Down jump to the previous / next prompt.
+  Without the script the keys go to the program as before.
+- When a command that ran 10 s or more (Features page; 0 turns it off) ends
+  in a background tab, the tab's name turns bold and the desktop shows a
+  notice with the tab's number and the exit status, never the command or
+  its output.
+- Programs see `TERM_PROGRAM=moriartty` and `TERM_PROGRAM_VERSION`.
+
+Keyboard
+- Every shortcut can be changed or turned off on the Keyboard page (new
+  `keys` settings table). Bad entries are reported in the Event Log and
+  skipped; the other shortcuts keep working.
+
+Releases
+- Only `-rc` tags are published as pre-releases now.
+
 ## 0.9.0 — 2026-10-21 (release candidate)
 
 Includes the 0.7 and 0.8 work, which was not released separately.

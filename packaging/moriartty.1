@@ -1,4 +1,4 @@
-.TH MORIARTTY 1 "2026-10-21" "Moriartty 0.9.0" "User Commands"
+.TH MORIARTTY 1 "2026-10-24" "Moriartty 0.9.5" "User Commands"
 .SH NAME
 moriartty \- private-by-default terminal emulator inspired by PuTTY's pterm
 .SH SYNOPSIS
@@ -11,13 +11,18 @@ selecting text copies it (to the PRIMARY selection), the right mouse button
 pastes, and the settings follow PuTTY's configuration tree.
 .PP
 Ctrl+Right-click inside the terminal opens the menu (Copy, Paste, Find,
-New Tab, New Window, Settings, Event Log, ...).
+New Tab, New Window, Saved Sessions, Settings, Event Log, ...).
+.PP
+A saved session can run a command instead of the shell, for example
+.BR "ssh admin@prod.example.com" .
+The drop-down next to the + button, or Ctrl+Shift+S, opens a saved session
+in a new window.
 .SH OPTIONS
 .TP
 .BI \-load " name"
-Use the saved session (settings profile)
+Use the saved session
 .I name
-instead of Default Settings.
+instead of Default Settings, and run its command if it has one.
 .TP
 .B \-config
 Open the settings window first.
@@ -45,12 +50,14 @@ Log all session output to
 .BI \-e " command " \fR[\fIargs\fR...]
 Run
 .I command
-instead of the shell. It is started directly, not through a shell, and
-must be the last option.
+instead of the shell (or the saved session's command). It is started
+directly, not through a shell, and must be the last option.
 .TP
 .BR \-help ", " \-version
 Show usage or the version, and exit.
 .SH KEYBOARD
+The defaults are listed here; every shortcut can be changed or turned off
+in Settings, Terminal, Keyboard.
 .TP
 .BR Ctrl+Shift+C ", " Ctrl+Insert
 Copy to the clipboard.
@@ -73,6 +80,12 @@ Switch tabs (with two or more tabs).
 .B Ctrl+Shift+N
 New window.
 .TP
+.B Ctrl+Shift+S
+Saved sessions menu.
+.TP
+.BR Ctrl+Shift+Up ", " Ctrl+Shift+Down
+Jump to the previous or next prompt (with shell integration).
+.TP
 .B Ctrl+Shift+P
 Settings.
 .TP
@@ -87,10 +100,25 @@ Settings and log files are created private (mode 0600) and symlinks are
 refused. See
 .I /usr/share/doc/moriartty/README.md
 for the full list.
+.SH SHELL INTEGRATION
+Sourcing
+.I /usr/share/moriartty/shell-integration/moriartty.bash
+(or
+.IR .zsh ,
+.IR .fish )
+from the shell's startup file marks prompts and commands with OSC 133
+sequences. Moriartty then jumps between prompts, and when a command that ran
+for a while ends in a background tab, its name turns bold and the desktop
+shows a notice with the tab's number and the exit status.
 .SH ENVIRONMENT
 .TP
 .B MORIARTTY_DEBUG
 If set, diagnostics are written to standard error.
+.TP
+.BR TERM_PROGRAM ", " TERM_PROGRAM_VERSION
+Set to
+.B moriartty
+and its version for programs running in the terminal.
 .TP
 .B XDG_CONFIG_HOME
 Where settings are kept (default
@@ -101,6 +129,9 @@ Where settings are kept (default
 Saved sessions, one TOML file each.
 .I Default Settings.toml
 applies to every new window.
+.TP
+.I /usr/share/moriartty/shell-integration/
+Shell integration scripts for bash, zsh and fish.
 .SH SEE ALSO
 .BR pterm (1),
 .BR putty (1)
