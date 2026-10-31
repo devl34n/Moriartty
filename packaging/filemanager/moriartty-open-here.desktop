@@ -1,0 +1,15 @@
+# Dolphin (KDE) service menu: "Open in Moriartty" on a folder, and on the
+# empty space in one. The folder is passed as one argument to -dir, which
+# refuses anything that isn't a directory; no shell is involved.
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+X-KDE-Protocols=file
+X-KDE-Priority=TopLevel
+Actions=openInMoriartty;
+
+[Desktop Action openInMoriartty]
+Name=Open in Moriartty
+Icon=io.github.moriartty.Moriartty
+Exec=moriartty -dir %f

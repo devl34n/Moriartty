@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Manual run for an existing tag (Actions → Release → Run workflow), e.g.
+  # to rebuild and re-upload the packages of a release made by hand.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v0.3.0)'
+        required: true
+
+# Least privilege: only the job that publishes can write.
+permissions:
+  contents: read
+
+jobs:
+  # Everything CI checks must pass before anything is published. A manual run
+  # checks the branch it was started from.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      # To create the release and upload files.
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      # Pinned to a commit SHA (v4.2.2) so a moved tag can't change what runs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      # The build scripts run inside Fedora/Debian containers via podman,
+      # so the runner's old GTK/VTE doesn't matter here.
+      - name: Build RPM (Fedora container)
+        run: bash ./build-rpm.sh
+
+      - name: Build DEB (Debian 13 container)
+        run: bash ./build-deb.sh
+
+      - name: Build Arch package (Arch Linux container)
+        run: bash ./build-arch.sh
+
+      - name: Collect packages and checksums
+        run: |
+          mkdir -p out
+          cp dist/deb/*.deb out/
+          # moriartty-[0-9]* leaves out the moriartty-debug package.
+          cp dist/arch/moriartty-[0-9]*.pkg.tar.zst out/
+          for f in dist/rpm/*.rpm; do
+            case "$f" in
+              *-debuginfo-*|*-debugsource-*) ;;   # not useful to end users
+              *) cp "$f" out/ ;;
+            esac
+          done
+          cd out && sha256sum -- * > SHA256SUMS
+
+      # Create the release, or — if it was already created (e.g. by hand) —
+      # add the packages to it. Files already published are never replaced
+      # (no --clobber): users may have verified them, so a rebuild that
+      # differs must become a new release, not a silent swap.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG exists; adding packages to it (existing files are kept)."
+            gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY"
+          else
+            # Only -rc tags are pre-releases; from 0.9.5 on, every other tag
+            # is a regular release and becomes "latest".
+            PRE=()
+            case "$TAG" in *-rc*) PRE=(--prerelease) ;; esac
+            gh release create "$TAG" out/* "${PRE[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Moriartty $TAG" \
+              --generate-notes
+          fi

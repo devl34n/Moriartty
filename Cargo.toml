@@ -1,0 +1,35 @@
+[package]
+name = "moriartty"
+version = "0.9.9"
+edition = "2021"
+# gtk4 0.11 / glib 0.22 need 1.92.
+rust-version = "1.92"
+description = "A fast, private-by-default terminal for Linux, inspired by PuTTY's pterm"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+# v0_70: check_match_at / check_hyperlink_at (Ctrl+click links). Moriartty
+# already requires VTE >= 0.76, so this adds no new runtime requirement.
+vte = { package = "vte4", version = "0.10", features = ["v0_70"] }
+serde = { version = "1", features = ["derive"] }
+# 1.x: the same toml the gtk-rs build scripts use, so only one copy is built.
+toml = "1"
+nix = { version = "0.31", features = ["signal", "process", "user"] }
+libc = "0.2"
+
+# Feeds hostile output into a real VTE widget. Has its own main() (GTK must
+# run on the main thread); skips itself when there is no display.
+[[test]]
+name = "evil_bytes"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Keep integer overflow checks on in release builds: wrap-around bugs must
+# abort, never silently corrupt state.
+overflow-checks = true
+panic = "abort"

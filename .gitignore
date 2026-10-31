@@ -1,0 +1,13 @@
+# Build output (published packages are on GitHub's Releases page)
+/target/
+/rpmbuild/
+/dist/
+/vendor/
+/.cargo/
+
+# Editors / OS
+*.swp
+*~
+.idea/
+.vscode/
+.DS_Store

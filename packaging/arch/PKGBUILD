@@ -1,0 +1,86 @@
+# Maintainer: devl34n <devlean@proton.me>
+#
+# Builds Moriartty from the tagged source on GitHub. The same file is used by
+# build-arch.sh (a container build of the working tree, for the Releases
+# page) and by update-aur.sh (checksum and .SRCINFO for the AUR).
+
+pkgname=moriartty
+pkgver=0.9.9
+pkgrel=1
+pkgdesc="Private-by-default terminal for Linux, inspired by PuTTY's pterm"
+arch=('x86_64' 'aarch64')
+url="https://github.com/devl34n/Moriartty"
+license=('MIT')
+# ttf-dejavu: the default font is "Monospace", and a minimal Arch install may
+# have no proper monospace font for it, which leaves the text sitting high in
+# its cells (the block cursor hangs below the line).
+depends=('gtk4' 'vte4' 'glib2' 'pango' 'gcc-libs' 'glibc' 'ttf-dejavu')
+# ImageMagick scales the logo to the icon sizes.
+makedepends=('cargo' 'imagemagick')
+optdepends=('python-nautilus: "Open in Moriartty" in GNOME Files')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+# Filled in by update-aur.sh for the AUR.
+sha256sums=('SKIP')
+
+prepare() {
+    cd "Moriartty-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "Moriartty-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "Moriartty-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    # The evil bytes test skips itself without a display.
+    cargo test --frozen --release
+}
+
+package() {
+    cd "Moriartty-$pkgver"
+    local share="$pkgdir/usr/share" id=io.github.moriartty.Moriartty size sh
+
+    install -Dm0755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm0644 "packaging/$id.desktop" "$share/applications/$id.desktop"
+    install -Dm0644 "packaging/$id.metainfo.xml" "$share/metainfo/$id.metainfo.xml"
+
+    # The logo is 3:2; pad it to a square instead of letting the icons come
+    # out non-square.
+    for size in 16 24 32 48 64 128 256 512; do
+        install -d "$share/icons/hicolor/${size}x${size}/apps"
+        magick packaging/moriartty-logo.png -resize "${size}x${size}" \
+            -background none -gravity center -extent "${size}x${size}" \
+            "$share/icons/hicolor/${size}x${size}/apps/$id.png"
+    done
+    install -Dm0644 "packaging/$id-symbolic.svg" \
+        "$share/icons/hicolor/symbolic/apps/$id-symbolic.svg"
+
+    # makepkg compresses the man page itself.
+    install -Dm0644 packaging/moriartty.1 "$share/man/man1/moriartty.1"
+    install -Dm0644 packaging/completions/moriartty.bash \
+        "$share/bash-completion/completions/moriartty"
+    install -Dm0644 packaging/completions/_moriartty "$share/zsh/site-functions/_moriartty"
+    install -Dm0644 packaging/completions/moriartty.fish \
+        "$share/fish/vendor_completions.d/moriartty.fish"
+
+    for sh in bash zsh fish; do
+        install -Dm0644 "packaging/shell-integration/moriartty.$sh" \
+            "$share/moriartty/shell-integration/moriartty.$sh"
+    done
+
+    # "Open in Moriartty" in Dolphin, and in GNOME Files with python-nautilus.
+    install -Dm0644 packaging/filemanager/moriartty-open-here.desktop \
+        "$share/kio/servicemenus/moriartty-open-here.desktop"
+    install -Dm0644 packaging/filemanager/moriartty-nautilus.py \
+        "$share/nautilus-python/extensions/moriartty-nautilus.py"
+
+    install -Dm0644 README.md "$share/doc/$pkgname/README.md"
+    install -Dm0644 LICENSE "$share/licenses/$pkgname/LICENSE"
+}

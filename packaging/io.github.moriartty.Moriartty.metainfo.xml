@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: makes Moriartty show up in GNOME Software / KDE Discover. -->
+<component type="desktop-application">
+  <id>io.github.moriartty.Moriartty</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Moriartty</name>
+  <summary>Private, PuTTY-inspired terminal</summary>
+  <developer id="io.github.devl34n">
+    <name>devl34n</name>
+  </developer>
+
+  <description>
+    <p>
+      Moriartty is a fast, private-by-default terminal emulator inspired by
+      PuTTY's pterm. It keeps PuTTY's habits — copy on select, right-click
+      paste and the familiar configuration tree — in a native GTK 4
+      application, with no network access and no telemetry.
+    </p>
+    <ul>
+      <li>Copy on select and right-click paste, on by default</li>
+      <li>Safe paste: escape sequences and hidden control characters are stripped, multi-line pastes ask first</li>
+      <li>Saved sessions that run a command, such as ssh to a server, opened from a drop-down next to the tabs</li>
+      <li>Shell integration: jump between prompts, and a notice when a long command ends in a background tab</li>
+      <li>Tabs you can drag between windows, find in scrollback, font zoom, Ctrl+click web links and keyboard shortcuts you can change</li>
+      <li>Moriartty Dark and Light colours that follow the desktop, plus PuTTY classic, Tango, Solarized and Dracula</li>
+      <li>Session logging, with a visible indicator</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.moriartty.Moriartty.desktop</launchable>
+
+  <url type="homepage">https://github.com/devl34n/Moriartty</url>
+  <url type="bugtracker">https://github.com/devl34n/Moriartty/issues</url>
+  <url type="vcs-browser">https://github.com/devl34n/Moriartty</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The terminal window</caption>
+      <image>https://raw.githubusercontent.com/devl34n/Moriartty/main/docs/screenshots/terminal.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>PuTTY-style settings</caption>
+      <image>https://raw.githubusercontent.com/devl34n/Moriartty/main/docs/screenshots/settings.png</image>
+    </screenshot>
+  </screenshots>
+
+  <provides>
+    <binary>moriartty</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.9.9" date="2026-10-31">
+      <description>
+        <ul>
+          <li>A program that never stops printing can no longer freeze the window</li>
+          <li>Options such as -log are for that window only, and are no longer saved by accident</li>
+          <li>Other programs can no longer trigger menu actions such as Copy All over the session bus</li>
+          <li>More hidden characters are caught in pastes, links and titles, and Shift+Middle-click pastes are filtered too</li>
+          <li>A tab closes when its shell exits, even with a job still running in the background</li>
+          <li>Shortcuts work on Greek, Cyrillic and other non-Latin keyboard layouts</li>
+          <li>Backspace erases whole characters at password prompts and in other programs that leave line editing to the terminal</li>
+          <li>A saved session keeps its command while that program is missing</li>
+          <li>Command-line fixes: -config keeps -e and -dir, and options count in any order</li>
+          <li>Larger, clearer title bar icons</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.8" date="2026-10-31">
+      <description>
+        <ul>
+          <li>Drag a tab out of its window to detach it, and onto another window to attach it again; the program and its scrollback carry on</li>
+          <li>Detach Tab in the menu, and Ctrl+Shift+D</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.7" date="2026-10-25">
+      <description>
+        <ul>
+          <li>Open in Moriartty from GNOME Files and Dolphin: right-click a folder, or the empty space in one</li>
+          <li>Packages for Arch Linux, in the AUR and on the Releases page</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.5" date="2026-10-24">
+      <description>
+        <p>Sessions, shell integration and your own shortcuts.</p>
+        <ul>
+          <li>A saved session can run a command instead of the shell, for example ssh to a server</li>
+          <li>Open a saved session from the drop-down next to the + button</li>
+          <li>Jump between prompts with Ctrl+Shift+Up and Ctrl+Shift+Down, with the shell integration scripts for bash, zsh and fish</li>
+          <li>A notice when a long command ends in a background tab</li>
+          <li>Every keyboard shortcut can be changed or turned off</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.0" date="2026-10-21" type="development">
+      <description>
+        <p>Release candidate for 1.0.</p>
+        <ul>
+          <li>Idle tabs no longer use any processor time</li>
+          <li>Ctrl+click opens links again</li>
+          <li>Picking a colour scheme applies it right away</li>
+          <li>Background transparency works with more GTK themes</li>
+          <li>Built on the current GTK and VTE Rust bindings</li>
+          <li>Manual page and shell completions for bash, zsh and fish</li>
+          <li>More tests for settings files, log files and hostile terminal output</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-10-20">
+      <description>
+        <p>A fresh look.</p>
+        <ul>
+          <li>New Moriartty Dark and Light colours that follow the desktop's light or dark style</li>
+          <li>The title bar matches the terminal's colours</li>
+          <li>Tabs can be dragged to reorder them and scrolled with the mouse wheel</li>
+          <li>More room around the text, and optional background transparency</li>
+          <li>Colour changes are previewed live in the settings window</li>
+          <li>Sharper, square application icons</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.0" date="2026-10-20">
+      <description>
+        <p>Safer, more private defaults.</p>
+        <ul>
+          <li>Selected text no longer goes to the clipboard unless you turn that on; right-click still pastes it</li>
+          <li>Hyperlinks set by programs and international web addresses ask before opening</li>
+          <li>Links with hidden characters are refused</li>
+          <li>Pastes with hidden characters are shown before they are sent</li>
+          <li>Copying a large scrollback asks first</li>
+          <li>A tab shows when its output is being logged</li>
+          <li>Unreadable saved settings are kept aside instead of being overwritten</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.4" date="2026-10-19">
+      <description>
+        <p>The close button on a tab works again.</p>
+      </description>
+    </release>
+    <release version="0.4.3" date="2026-10-19">
+      <description>
+        <ul>
+          <li>Much slimmer title bar</li>
+          <li>Double-clicking the title bar no longer also opens a tab</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.2" date="2026-10-19">
+      <description>
+        <ul>
+          <li>One slim title bar with the tabs in it</li>
+          <li>Click next to the tabs for a new tab; middle-click closes one</li>
+          <li>Tabs are named after what runs in them</li>
+          <li>Tab shortcuts work wherever the keyboard focus is</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-10-19">
+      <description>
+        <ul>
+          <li>Tabs, with keyboard shortcuts for opening, closing, switching and moving them</li>
+          <li>A broken saved shell or log file setting no longer stops Moriartty from starting</li>
+          <li>Safer paste confirmation: Cancel is the default and hidden characters are shown</li>
+          <li>Links that hide their real host behind a user name are refused</li>
+          <li>Link tooltips reveal the real host of international domain names</li>
+          <li>The Event Log updates live</li>
+          <li>Hardened log file and pseudo-terminal handling</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.0" date="2026-10-18">
+      <description>
+        <ul>
+          <li>Can be chosen as the desktop's default terminal (xdg-terminal-exec, x-terminal-emulator)</li>
+          <li>New -dir and -hold options</li>
+          <li>Font zoom is remembered and can be saved as default</li>
+          <li>Option to hide the title bar buttons</li>
+          <li>Closing a window running an -e program now asks first</li>
+          <li>The terminal now resizes without polling</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-10-18">
+      <description>
+        <p>Find in scrollback, font zoom, Ctrl+click links, colour schemes, settings saved as default.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-10-18">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
